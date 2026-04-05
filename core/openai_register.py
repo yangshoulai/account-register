@@ -1,0 +1,585 @@
+from __future__ import annotations
+
+import asyncio
+import errno
+import inspect
+import json
+import os
+import signal
+import subprocess
+import time
+import urllib.parse
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+from pydoll.browser import Chrome
+from pydoll.browser.options import ChromiumOptions
+from pydoll.browser.tab import Tab
+from pydoll.constants import Key
+
+from service.config_service import ConfigService, OpenAIRegisterConfig
+from service.cpa_service import CpaService
+from service.http_service import HttpService
+from service.mail_service import MailService, GeneratedEmailAddress
+from util import openai_register_util
+from util.account_util import Account, create_new_account
+from util.logger import get_logger
+from util.openai_register_util import OAuthStart
+
+LOGGER = get_logger("OpenAI Pydoll Register")
+
+
+class CallbackServer:
+    """本地 OAuth 回调服务。"""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 1455):
+        self.host = host
+        self.port = port
+        self._server: asyncio.base_events.Server | None = None
+        self._clients: set[asyncio.StreamWriter] = set()
+
+    @staticmethod
+    def _pids_listening_on_port(port: int) -> set[int]:
+        """查找当前占用端口的进程。"""
+
+        cmd = ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            return set()
+
+        if result.returncode not in (0, 1):
+            return set()
+
+        pids: set[int] = set()
+        for line in result.stdout.splitlines():
+            candidate = line.strip()
+            if candidate.isdigit():
+                pids.add(int(candidate))
+        return pids
+
+    @staticmethod
+    def _kill_pids(pids: set[int], timeout: float = 3.0) -> None:
+        """尝试释放端口占用进程。"""
+
+        current_pid = os.getpid()
+        targets = [pid for pid in pids if pid != current_pid]
+
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+        deadline = time.time() + timeout
+        alive = set(targets)
+        while time.time() < deadline and alive:
+            for pid in list(alive):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    alive.discard(pid)
+                except PermissionError:
+                    pass
+            time.sleep(0.1)
+
+        for pid in alive:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    async def _try_free_port(self) -> None:
+        pids = self._pids_listening_on_port(self.port)
+        if not pids:
+            return
+        LOGGER.info(f"端口 {self.port} 被占用，准备释放进程: {sorted(pids)}")
+        self._kill_pids(pids)
+        await asyncio.sleep(0.2)
+
+    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._clients.add(writer)
+        try:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = await reader.read(1024)
+                if not chunk:
+                    break
+                data += chunk
+                if len(data) > 64 * 1024:
+                    break
+
+            response = (
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/plain; charset=utf-8\r\n"
+                b"Content-Length: 2\r\n"
+                b"Connection: close\r\n"
+                b"\r\nOK"
+            )
+            writer.write(response)
+            await writer.drain()
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            self._clients.discard(writer)
+
+    async def start(self) -> None:
+        try:
+            self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            await self._try_free_port()
+            self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
+
+        LOGGER.info(f"Callback server started at http://{self.host}:{self.port}")
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+
+        for writer in list(self._clients):
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+        self._clients.clear()
+        LOGGER.info("Callback server stopped")
+
+
+def _build_chrome_options(
+        *,
+        chrome_binary_path: str | None = None,
+        headless: bool = False,
+        proxy: str | None = None,
+) -> ChromiumOptions:
+    """构建浏览器启动参数。"""
+
+    options = ChromiumOptions()
+    options.headless = headless
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--lang=zh-CN")
+    options.set_accept_languages("zh-CN,zh;q=0.9")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-setuid-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+
+    if proxy:
+        options.add_argument(f"--proxy-server={proxy}")
+    if chrome_binary_path:
+        options.binary_location = chrome_binary_path
+    return options
+
+
+async def _wait_for_url(tab: Tab, url_flags: list[str], timeout_sec: int) -> str:
+    """等待页面跳转到指定 URL。"""
+
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        current_url = (await tab.current_url or "").strip()
+        for flag in url_flags:
+            if flag in current_url:
+                return current_url
+        await asyncio.sleep(1)
+    raise RuntimeError(f"等待网页 {url_flags} 超时")
+
+
+class OpenAIRegister:
+    """OpenAI 注册机。"""
+
+    def __init__(
+            self,
+            config: OpenAIRegisterConfig,
+            mail_service: MailService,
+            cpa_service: CpaService,
+            http_service: HttpService,
+            *,
+            browser_proxy: str | None = None,
+    ):
+        self._config = config
+        self._mail_service = mail_service
+        self._cpa_service = cpa_service
+        self._http_service = http_service
+        self._browser_proxy = browser_proxy
+
+    @classmethod
+    def from_config_file(cls, config_file: str | Path = "config.toml") -> "OpenAIRegister":
+        """通过配置文件实例化注册机。"""
+
+        app_config = ConfigService.load(config_file)
+        browser_proxy = (
+                app_config.http.proxy
+                or app_config.http.https_proxy
+                or app_config.http.http_proxy
+        )
+        return cls(
+            config=app_config.openai_register,
+            mail_service=MailService.from_config_file(config_file),
+            cpa_service=CpaService.from_config_file(config_file),
+            http_service=HttpService(app_config.http),
+            browser_proxy=browser_proxy,
+        )
+
+    @property
+    def config(self) -> OpenAIRegisterConfig:
+        """返回注册机配置。"""
+
+        return self._config
+
+    async def _wait_for_verify_code(self, email_address: GeneratedEmailAddress, received_after: str, timeout: int) -> str:
+        """轮询 MailService 获取验证码。"""
+        deadline = time.time() + timeout
+
+        def mail_filter(mail_from: str, subject: str, receive_at: str) -> bool:
+            if not "openai.com" in mail_from:
+                return False
+            if (not receive_at) or receive_at < received_after:
+                return False
+            if (not "ChatGPT" in subject) and (not "OpenAI" in subject):
+                return False
+            return True
+
+        last_error: Exception | None = None
+        times = 0
+        while time.time() < deadline:
+            try:
+                code = self._mail_service.get_latest_verification_code(email_address=email_address, mail_filter=mail_filter, )
+                if code:
+                    LOGGER.info(f"[{times + 1}] 获取验证码成功: {code}")
+                    return code
+                LOGGER.warning(f"[{times + 1}] 未获取验证码")
+            except Exception as exc:
+                LOGGER.warning(f"[{times + 1}] 获取验证码失败: {str(exc)[:200]}")
+                last_error = exc
+            await asyncio.sleep(5)
+
+        if last_error is not None:
+            LOGGER.warning(f"等待验证码超时，最后一次错误: {last_error}")
+        return ""
+
+    @staticmethod
+    async def _get_element_name(element: Any) -> str:
+        """兼容同步/异步的 get_attribute 调用。"""
+
+        value = element.get_attribute("name")
+        if inspect.isawaitable(value):
+            value = await value
+        return str(value or "").strip()
+
+    async def _try_input_password_and_submit(
+            self,
+            tab: Tab,
+            password: str,
+            *,
+            password_expression: str,
+            try_times: int = 8,
+    ) -> None:
+        """输入密码并提交。"""
+
+        for index in range(try_times):
+            tag = f"[{index + 1}]"
+            input_password = await tab.query(password_expression, timeout=self._config.default_timeout_seconds)
+            await input_password.wait_until(is_visible=True, is_interactable=False, timeout=10)
+            LOGGER.info(f"{tag} 输入密码：{password}")
+            await input_password.type_text(password, humanize=True)
+
+            btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
+            await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
+            LOGGER.info(f"{tag} 点击继续按钮")
+            await btn_continue.click(humanize=True)
+
+            next_element = await tab.query(
+                "//button[@data-dd-action-name='Try again'] | //input[@name='code']",
+                timeout=self._config.default_timeout_seconds,
+            )
+            if next_element.tag_name == "button":
+                LOGGER.warning(f"{tag} 密码提交失败，点击重试")
+                await next_element.click(humanize=True)
+                continue
+
+            LOGGER.info(f"{tag} 提交密码成功")
+            return
+
+        raise RuntimeError("提交密码失败")
+
+    async def _start_register(self, tab: Tab) -> Account:
+        """执行 ChatGPT 账号注册。"""
+
+        await tab.go_to("https://chatgpt.com", timeout=self._config.default_timeout_seconds)
+        LOGGER.info("访问 https://chatgpt.com")
+
+        btn_login = await tab.query("//button[@data-testid='login-button']", timeout=10)
+        await btn_login.wait_until(is_visible=True, is_interactable=True, timeout=10)
+        LOGGER.info("点击登录按钮")
+        await btn_login.click(humanize=True)
+
+        input_email = await tab.query("//input[@id='email']", raise_exc=False, timeout=5)
+        if not input_email:
+            LOGGER.warning("未找到邮箱输入框，刷新页面重试")
+            await tab.refresh()
+            btn_login = await tab.query("//button[@data-testid='login-button']", timeout=10)
+            await btn_login.wait_until(is_visible=True, is_interactable=True, timeout=10)
+            await btn_login.click(humanize=True)
+            input_email = await tab.query("//input[@id='email']", raise_exc=False, timeout=5)
+        if not input_email:
+            raise RuntimeError("未找到邮箱输入框")
+
+        account = create_new_account(self._mail_service.generate_email_address())
+        birthday_text = "-".join(account.birthday)
+        LOGGER.info(
+            f"生成账号 => email={account.email}, username={account.username}, password={account.password}, birthday={birthday_text}"
+        )
+
+        await input_email.wait_until(is_visible=True, is_interactable=False, timeout=10)
+        LOGGER.info(f"输入邮箱：{account.email}")
+        await input_email.type_text(account.email, humanize=True)
+
+        btn_submit = await tab.query("//button[@type='submit']", timeout=10)
+        await btn_submit.wait_until(is_visible=True, is_interactable=True, timeout=10)
+        LOGGER.info("点击提交按钮")
+
+        received_after = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        await btn_submit.click(humanize=True)
+
+        input_password_or_code = await tab.query(
+            "//input[@name='new-password' or @name='code']",
+            timeout=self._config.default_timeout_seconds,
+        )
+        if await self._get_element_name(input_password_or_code) == "new-password":
+            await self._try_input_password_and_submit(
+                tab,
+                account.password,
+                password_expression="//input[@name='new-password']",
+            )
+
+        input_code = await tab.query("//input[@name='code']", timeout=self._config.default_timeout_seconds)
+        await input_code.wait_until(is_visible=True, is_interactable=False, timeout=10)
+        LOGGER.info("等待验证码")
+
+        code = await self._wait_for_verify_code(account.email_address, received_after=received_after, timeout=self._config.default_timeout_seconds * 5)
+        if not code:
+            raise RuntimeError("获取验证码失败")
+
+        LOGGER.info(f"输入验证码：{code}")
+        await input_code.type_text(code, humanize=False)
+
+        btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
+        await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
+        LOGGER.info("点击继续按钮")
+        await btn_continue.click(humanize=True)
+
+        input_username = await tab.query("//input[@name='name']", timeout=self._config.default_timeout_seconds)
+        await input_username.wait_until(is_visible=True, is_interactable=False, timeout=10)
+        LOGGER.info(f"输入用户名：{account.username}")
+        await input_username.type_text(account.username, humanize=True)
+
+        input_age = await tab.query("//input[@name='age']", timeout=5, raise_exc=False)
+        if input_age:
+            await input_age.wait_until(is_visible=True, is_interactable=False, timeout=5)
+            age = str(date.today().year - int(account.birthday[0]))
+            LOGGER.info(f"输入年龄：{age}")
+            await input_age.type_text(age, humanize=True)
+        else:
+            birthday_compact = "".join(account.birthday)
+            LOGGER.info(f"输入生日：{birthday_text}")
+            await tab.keyboard.press(Key.TAB)
+            await tab.keyboard.type_text(birthday_compact)
+
+        btn_finish = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
+        await btn_finish.wait_until(is_visible=True, is_interactable=True, timeout=10)
+        LOGGER.info("点击完成账户创建按钮")
+        await btn_finish.click(humanize=True)
+
+        await _wait_for_url(
+            tab,
+            url_flags=["https://chatgpt.com"],
+            timeout_sec=self._config.default_timeout_seconds,
+        )
+        await asyncio.sleep(1)
+        LOGGER.info("账号注册成功")
+        return account
+
+    async def _try_get_consent_url(
+            self,
+            tab: Tab,
+            account: Account,
+            oauth: OAuthStart,
+            *,
+            try_times: int = 2,
+    ) -> None:
+        """执行 OAuth 授权页登录流程。"""
+
+        last_url = ""
+        for index in range(try_times):
+            tag = f"[{index + 1}]"
+            try:
+                LOGGER.info(f"{tag} 访问授权链接页面")
+                await tab.go_to(oauth.auth_url, timeout=self._config.default_timeout_seconds)
+                await asyncio.sleep(2)
+
+                input_email = await tab.query("//input[@name='email']", timeout=10)
+                await input_email.wait_until(is_visible=True, is_interactable=False, timeout=10)
+                LOGGER.info(f"{tag} 输入邮箱：{account.email}")
+                await input_email.type_text(account.email, humanize=True)
+
+                btn_submit = await tab.query("//button[@type='submit']", timeout=10)
+                await btn_submit.wait_until(is_visible=True, is_interactable=True, timeout=10)
+                LOGGER.info(f"{tag} 点击提交按钮")
+
+                received_after = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                await btn_submit.click(humanize=True)
+
+                input_password_or_code = await tab.query(
+                    "//input[@name='current-password' or @name='code']",
+                    timeout=self._config.default_timeout_seconds,
+                )
+                if await self._get_element_name(input_password_or_code) == "current-password":
+                    await self._try_input_password_and_submit(
+                        tab,
+                        account.password,
+                        password_expression="//input[@name='current-password']",
+                    )
+
+                input_code = await tab.query("//input[@name='code']", timeout=self._config.default_timeout_seconds)
+                await input_code.wait_until(is_visible=True, is_interactable=False, timeout=10)
+                LOGGER.info(f"{tag} 等待验证码")
+
+                code = await self._wait_for_verify_code(email_address=account.email_address, received_after=received_after,
+                                                        timeout=self._config.default_timeout_seconds * 5)
+                if not code:
+                    raise RuntimeError("无法获取验证码")
+
+                LOGGER.info(f"{tag} 输入验证码：{code}")
+                await input_code.type_text(code, humanize=False)
+
+                btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
+                await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
+                LOGGER.info(f"{tag} 点击继续按钮")
+                await btn_continue.click(humanize=True)
+
+                last_url = await _wait_for_url(
+                    tab,
+                    url_flags=["/codex/consent", "/add-phone"],
+                    timeout_sec=self._config.default_timeout_seconds,
+                )
+                if "/add-phone" not in last_url:
+                    return
+            except Exception as exc:
+                LOGGER.warning(f"{tag} 获取授权链接失败：{exc}")
+
+        raise RuntimeError("需要手机号" if "/add-phone" in last_url else "无法获取授权链接")
+
+    async def _start_oauth(self, tab: Tab, account: Account) -> tuple[OAuthStart, str]:
+        """执行 Codex OAuth 流程。"""
+
+        oauth = openai_register_util.generate_oauth_url(
+            self._config.oauth_client_id,
+            self._config.callback_server_port,
+        )
+        LOGGER.info(f"生成 OAuth 授权链接：{oauth.auth_url}")
+        await self._try_get_consent_url(tab, account=account, oauth=oauth)
+
+        btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
+        await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
+        LOGGER.info("点击继续按钮")
+        await btn_continue.click(humanize=True)
+
+        callback_host = f"localhost:{self._config.callback_server_port}"
+        LOGGER.info("等待回调链接")
+        callback_url = await _wait_for_url(
+            tab,
+            url_flags=[callback_host],
+            timeout_sec=self._config.default_timeout_seconds,
+        )
+        LOGGER.info(f"成功获取回调链接：{callback_url}")
+        return oauth, callback_url
+
+    def _submit_callback_url(self, oauth: OAuthStart, callback_url: str) -> dict[str, Any]:
+        """提交 OAuth 回调地址并生成 CPA 授权文件。"""
+
+        parsed = urllib.parse.urlparse(callback_url)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+
+        code = (query.get("code", [""])[0] or "").strip()
+        state = (query.get("state", [""])[0] or "").strip()
+        error = (query.get("error", [""])[0] or "").strip()
+        error_description = (query.get("error_description", [""])[0] or "").strip()
+
+        if error:
+            raise RuntimeError(f"codex oauth error: {error}: {error_description}".strip())
+        if not code:
+            raise ValueError("callback url missing ?code=")
+        if not state:
+            raise ValueError("callback url missing ?state=")
+        if state != oauth.state:
+            raise ValueError("state mismatch")
+
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "authorization_code",
+                "client_id": oauth.client_id,
+                "code": code,
+                "redirect_uri": oauth.redirect_uri,
+                "code_verifier": oauth.code_verifier,
+            }
+        ).encode("utf-8")
+
+        response = self._http_service.post(
+            "https://auth.openai.com/oauth/token",
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            raise_for_status=True,
+        ).json()
+        return openai_register_util.create_cpa_auth_file_payload(response)
+
+    async def start(self):
+        """启动完整注册流程。"""
+
+        server = CallbackServer(port=self._config.callback_server_port)
+        await server.start()
+        try:
+            options = _build_chrome_options(
+                headless=self._config.headless,
+                chrome_binary_path=self._config.chrome_binary_path,
+                proxy=self._browser_proxy,
+            )
+            async with Chrome(options=options) as browser:
+                tab = await browser.start()
+                account = await self._start_register(tab)
+                oauth, callback_url = await self._start_oauth(tab, account)
+                LOGGER.info("开始提交回调链接")
+                auth_file = self._submit_callback_url(oauth, callback_url)
+                LOGGER.info("获取授权文件成功")
+
+                ok = self._cpa_service.upload_auth_file(
+                    f"{account.email}.json",
+                    json.dumps(auth_file, ensure_ascii=False),
+                )
+                if not ok:
+                    raise RuntimeError("上传授权文件失败")
+                LOGGER.info("授权文件上传成功")
+        except Exception as exc:
+            LOGGER.error(f"注册失败：{exc}")
+            raise
+        finally:
+            await server.stop()
+
+    def start_sync(self):
+        """同步入口。"""
+
+        return asyncio.run(self.start())
+
+
+if __name__ == "__main__":
+    OpenAIRegister.from_config_file().start_sync()
