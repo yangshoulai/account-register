@@ -4,7 +4,7 @@ import random
 import string
 from typing import List
 
-from service.mail_service import GeneratedEmailAddress
+from service.base_mail_service import MailBox
 
 FIRST_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles",
@@ -61,10 +61,10 @@ class Account:
     password: str
     birthday: List[str]
     email: str
-    email_address: GeneratedEmailAddress
+    mail_box: MailBox
 
 
-def create_new_account(email_address: GeneratedEmailAddress, password_length: int = 12) -> Account:
+def create_new_account(mail_box: MailBox, password_length: int = 12) -> Account:
     first_name, last_name = _generate_username()
     password = _generate_password(password_length)
     birthdate = _generate_birthdate()
@@ -74,6 +74,6 @@ def create_new_account(email_address: GeneratedEmailAddress, password_length: in
     account.username = f"{first_name} {last_name}"
     account.birthday = birthdate.split("-")
     account.password = password
-    account.email = email_address.email
-    account.email_address = email_address
+    account.email = mail_box.email
+    account.mail_box = mail_box
     return account

@@ -18,10 +18,11 @@ from pydoll.browser.options import ChromiumOptions
 from pydoll.browser.tab import Tab
 from pydoll.constants import Key
 
+from service.base_mail_service import MailBox
 from service.config_service import ConfigService, OpenAIRegisterConfig
 from service.cpa_service import CpaService
 from service.http_service import HttpService
-from service.mail_service import MailService, GeneratedEmailAddress
+from service.mail_service import MailService
 from util import openai_register_util
 from util.account_util import Account, create_new_account
 from util.logger import get_logger
@@ -234,7 +235,7 @@ class OpenAIRegister:
 
         return self._config
 
-    async def _wait_for_verify_code(self, email_address: GeneratedEmailAddress, received_after: str, timeout: int) -> str:
+    async def _wait_for_verify_code(self, mail_box: MailBox, received_after: str, timeout: int) -> str:
         """轮询 MailService 获取验证码。"""
         deadline = time.time() + timeout
 
@@ -250,20 +251,35 @@ class OpenAIRegister:
         last_error: Exception | None = None
         times = 0
         while time.time() < deadline:
+            times = times + 1
             try:
-                code = self._mail_service.get_latest_verification_code(email_address=email_address, mail_filter=mail_filter, )
+                code = self._mail_service.get_latest_verification_code(mail_box, mail_filter=mail_filter)
                 if code:
-                    LOGGER.info(f"[{times + 1}] 获取验证码成功: {code}")
+                    LOGGER.info(f"[{times}] 获取验证码成功: {code}")
                     return code
-                LOGGER.warning(f"[{times + 1}] 未获取验证码")
+                LOGGER.warning(f"[{times}] 未获取验证码")
             except Exception as exc:
-                LOGGER.warning(f"[{times + 1}] 获取验证码失败: {str(exc)[:200]}")
+                LOGGER.warning(f"[{times}] 获取验证码失败: {str(exc)[:200]}")
                 last_error = exc
             await asyncio.sleep(5)
 
         if last_error is not None:
             LOGGER.warning(f"等待验证码超时，最后一次错误: {last_error}")
         return ""
+
+    async def _wait_for_verify_code_resend_if_needed(self, tab: Tab, mail_box: MailBox, received_after: str, timeout: int) -> str:
+        code = await self._wait_for_verify_code(mail_box, received_after, timeout)
+        if not code:
+            LOGGER.info("未收到验证码，将尝试重新发送验证码")
+            btn_resend = await tab.query("//button[@value='resend']", timeout=10, raise_exc=False)
+            if btn_resend:
+                await btn_resend.wait_until(is_visible=True, is_interactable=True, timeout=10)
+                LOGGER.info("点击重新发送验证码")
+                received_after = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                await btn_resend.click(humanize=True)
+                LOGGER.info("等待验证码")
+                code = await self._wait_for_verify_code(mail_box, received_after=received_after, timeout=timeout)
+        return code
 
     @staticmethod
     async def _get_element_name(element: Any) -> str:
@@ -332,7 +348,9 @@ class OpenAIRegister:
         if not input_email:
             raise RuntimeError("未找到邮箱输入框")
 
-        account = create_new_account(self._mail_service.generate_email_address())
+        account = create_new_account(self._mail_service.generate_mail_box())
+        if self._config.default_account_password:
+            account.password = self._config.default_account_password
         birthday_text = "-".join(account.birthday)
         LOGGER.info(
             f"生成账号 => email={account.email}, username={account.username}, password={account.password}, birthday={birthday_text}"
@@ -364,7 +382,8 @@ class OpenAIRegister:
         await input_code.wait_until(is_visible=True, is_interactable=False, timeout=10)
         LOGGER.info("等待验证码")
 
-        code = await self._wait_for_verify_code(account.email_address, received_after=received_after, timeout=self._config.default_timeout_seconds * 5)
+        code = await self._wait_for_verify_code_resend_if_needed(tab, account.mail_box, received_after=received_after,
+                                                                 timeout=2 * self._config.default_timeout_seconds)
         if not code:
             raise RuntimeError("获取验证码失败")
 
@@ -452,8 +471,8 @@ class OpenAIRegister:
                 await input_code.wait_until(is_visible=True, is_interactable=False, timeout=10)
                 LOGGER.info(f"{tag} 等待验证码")
 
-                code = await self._wait_for_verify_code(email_address=account.email_address, received_after=received_after,
-                                                        timeout=self._config.default_timeout_seconds * 5)
+                code = await self._wait_for_verify_code_resend_if_needed(tab, mail_box=account.mail_box, received_after=received_after,
+                                                                         timeout=self._config.default_timeout_seconds * 2)
                 if not code:
                     raise RuntimeError("无法获取验证码")
 
@@ -543,43 +562,42 @@ class OpenAIRegister:
         ).json()
         return openai_register_util.create_cpa_auth_file_payload(response)
 
-    async def start(self):
+    async def start(self, register_num: int = 1):
         """启动完整注册流程。"""
 
         server = CallbackServer(port=self._config.callback_server_port)
         await server.start()
         try:
-            options = _build_chrome_options(
-                headless=self._config.headless,
-                chrome_binary_path=self._config.chrome_binary_path,
-                proxy=self._browser_proxy,
-            )
-            async with Chrome(options=options) as browser:
-                tab = await browser.start()
-                account = await self._start_register(tab)
-                oauth, callback_url = await self._start_oauth(tab, account)
-                LOGGER.info("开始提交回调链接")
-                auth_file = self._submit_callback_url(oauth, callback_url)
-                LOGGER.info("获取授权文件成功")
-
-                ok = self._cpa_service.upload_auth_file(
-                    f"{account.email}.json",
-                    json.dumps(auth_file, ensure_ascii=False),
+            for i in range(register_num):
+                LOGGER.info(f"{'*' * 50} 开始第 {i + 1} / {register_num} 个注册流程 {'*' * 50}")
+                options = _build_chrome_options(
+                    headless=self._config.headless,
+                    chrome_binary_path=self._config.chrome_binary_path,
+                    proxy=self._browser_proxy,
                 )
-                if not ok:
-                    raise RuntimeError("上传授权文件失败")
-                LOGGER.info("授权文件上传成功")
+                async with Chrome(options=options) as browser:
+                    tab = await browser.start()
+                    account = await self._start_register(tab)
+                    oauth, callback_url = await self._start_oauth(tab, account)
+                    LOGGER.info("开始提交回调链接")
+                    auth_file = self._submit_callback_url(oauth, callback_url)
+                    LOGGER.info(f"获取授权文件成功\n{json.dumps(auth_file, indent=2, ensure_ascii=False)}")
+                    file_name = f"{account.email}.json"
+                    ok = self._cpa_service.upload_auth_file(file_name, json.dumps(auth_file, ensure_ascii=False))
+                    if not ok:
+                        raise RuntimeError("上传授权文件失败")
+                    LOGGER.success(f"授权文件[{file_name}]上传成功")
         except Exception as exc:
             LOGGER.error(f"注册失败：{exc}")
-            raise
         finally:
             await server.stop()
 
-    def start_sync(self):
+    def start_sync(self, register_num: int = 1):
         """同步入口。"""
 
-        return asyncio.run(self.start())
+        return asyncio.run(self.start(register_num))
 
 
 if __name__ == "__main__":
-    OpenAIRegister.from_config_file().start_sync()
+    register_num = 1
+    OpenAIRegister.from_config_file().start_sync(register_num)

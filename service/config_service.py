@@ -6,12 +6,6 @@ from typing import Any
 import tomllib
 
 DEFAULT_GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.modify",)
-DEFAULT_LUCKMAIL_BASE_URL = "https://mails.luckyous.com"
-DEFAULT_FREEMAIL_DOMAIN_INDEX = 0
-DEFAULT_FREEMAIL_MAX_PROBE_EMAILS = 10
-DEFAULT_MAIL_PROVIDER = "luckmail"
-DEFAULT_HTTP_TIMEOUT_SECONDS = 30
-DEFAULT_HTTP_VERIFY_SSL = True
 DEFAULT_HTTP_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -75,10 +69,9 @@ class GmailApiConfig:
 @dataclass(frozen=True)
 class GmailConfig:
     """Gmail 服务业务配置。"""
-
-    email: str
     api: GmailApiConfig
-    default_query: str | None = None
+    email: str
+    email_length: int = 8
     default_max_results: int = 20
 
     def resolve_token_file(self) -> Path:
@@ -102,7 +95,6 @@ class LuckMailConfig:
     email_type: str | None = None
     variant_mode: str | None = None
     domain: str | None = None
-    timeout_seconds: int = 30
 
 
 @dataclass(frozen=True)
@@ -111,15 +103,24 @@ class FreeMailConfig:
 
     base_url: str
     admin_token: str
-    domain_index: int = DEFAULT_FREEMAIL_DOMAIN_INDEX
-    max_probe_emails: int = DEFAULT_FREEMAIL_MAX_PROBE_EMAILS
+    email_length: int = 8
+    domain_index: int = 0
+    max_probe_emails: int = 10
+
+
+@dataclass(frozen=True)
+class DuckMailConfig:
+    """DuckMail API 配置。"""
+    base_url: str
+    authorization_token: str
+    gmail: GmailConfig
 
 
 @dataclass(frozen=True)
 class MailConfig:
     """通用邮箱服务配置。"""
 
-    provider: str = DEFAULT_MAIL_PROVIDER
+    provider: str = "duckmail"
 
 
 @dataclass(frozen=True)
@@ -127,8 +128,8 @@ class HttpConfig:
     """通用 HTTP 客户端配置。"""
 
     base_url: str | None = None
-    timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
-    verify_ssl: bool = DEFAULT_HTTP_VERIFY_SSL
+    timeout_seconds: int = 60
+    verify_ssl: bool = True
     user_agent: str = DEFAULT_HTTP_USER_AGENT
     proxy: str | None = None
     http_proxy: str | None = None
@@ -150,7 +151,8 @@ class OpenAIRegisterConfig:
     callback_server_port: int = 1455
     chrome_binary_path: str | None = None
     headless: bool = False
-    project_code: str | None = None
+
+    default_account_password: str | None = None
 
 
 @dataclass(frozen=True)
@@ -164,9 +166,11 @@ class CpaConfig:
 class AppConfig:
     """应用结构化配置对象。"""
 
-    gmail: GmailConfig
+    gmail: GmailConfig | None = None
     luckmail: LuckMailConfig | None = None
     freemail: FreeMailConfig | None = None
+    duckmail: DuckMailConfig | None = None
+
     mail: MailConfig = field(default_factory=MailConfig)
     http: HttpConfig = field(default_factory=HttpConfig)
     openai_register: OpenAIRegisterConfig = field(default_factory=OpenAIRegisterConfig)
@@ -193,67 +197,22 @@ class ConfigService:
         return cls._parse(data=data, base_dir=path.parent)
 
     @classmethod
-    def get_gmail_config(cls, config_file: str | Path = "config.toml") -> GmailConfig:
-        """快捷获取 GmailConfig。"""
-
-        return cls.load(config_file).gmail
-
-    @classmethod
-    def get_luckmail_config(cls, config_file: str | Path = "config.toml") -> LuckMailConfig:
-        """快捷获取 LuckMailConfig。"""
-
-        config = cls.load(config_file)
-        if config.luckmail is None:
-            raise ConfigError("缺少配置表: [services.luckmail]")
-        return config.luckmail
-
-    @classmethod
-    def get_http_config(cls, config_file: str | Path = "config.toml") -> HttpConfig:
-        """快捷获取 HttpConfig。"""
-
-        return cls.load(config_file).http
-
-    @classmethod
-    def get_freemail_config(cls, config_file: str | Path = "config.toml") -> FreeMailConfig:
-        """快捷获取 FreeMailConfig。"""
-
-        config = cls.load(config_file)
-        if config.freemail is None:
-            raise ConfigError("缺少配置表: [services.freemail]")
-        return config.freemail
-
-    @classmethod
-    def get_mail_config(cls, config_file: str | Path = "config.toml") -> MailConfig:
-        """快捷获取 MailConfig。"""
-
-        return cls.load(config_file).mail
-
-    @classmethod
-    def get_openai_register_config(cls, config_file: str | Path = "config.toml") -> OpenAIRegisterConfig:
-        """快捷获取 OpenAIRegisterConfig。"""
-
-        return cls.load(config_file).openai_register
-
-    @classmethod
-    def get_cpa_config(cls, config_file: str | Path = "config.toml") -> CpaConfig:
-        """快捷获取 CpaConfig。"""
-
-        config = cls.load(config_file)
-        if config.cpa is None:
-            raise ConfigError("缺少配置表: [services.cpa]")
-        return config.cpa
-
-    @classmethod
     def _parse(cls, data: dict[str, Any], base_dir: Path) -> AppConfig:
         services_table = cls._require_table(data, "services")
-        gmail_config = cls._parse_gmail_config(services_table, base_dir)
+
         mail_config = cls._parse_mail_config(services_table)
+        gmail_config = None
         luckmail_config = None
         freemail_config = None
+        duckmail_config = None
         if mail_config.provider == "freemail":
             freemail_config = cls._parse_freemail_config(services_table)
         elif mail_config.provider == "luckmail":
             luckmail_config = cls._parse_luckmail_config(services_table)
+        elif mail_config.provider == "duckmail":
+            duckmail_config = cls._parse_duckmail_config(services_table, base_dir=base_dir)
+        elif mail_config.provider == "gmail":
+            gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
 
         http_config = cls._parse_http_config(services_table)
         cpa_config = cls._parse_cpa_config(services_table)
@@ -265,6 +224,7 @@ class ConfigService:
             gmail=gmail_config,
             luckmail=luckmail_config,
             freemail=freemail_config,
+            duckmail=duckmail_config,
             mail=mail_config,
             http=http_config,
             openai_register=openai_register_config,
@@ -281,9 +241,8 @@ class ConfigService:
         )
 
         raw_email = gmail_table.get("email")
-        if raw_email is None:
-            raw_email = gmail_table.get("account_email")
         gmail_email = cls._parse_email(raw_email, field_name="services.gmail.email")
+        email_length = cls._parse_positive_int(gmail_table.get("email_length"), "services.gmail.email_length", default=8)
 
         gmail_api_config = GmailApiConfig(
             credentials_file=cls._parse_required_path(
@@ -298,10 +257,7 @@ class ConfigService:
         return GmailConfig(
             email=gmail_email,
             api=gmail_api_config,
-            default_query=cls._parse_nullable_str(
-                gmail_table.get("default_query"),
-                field_name="services.gmail.default_query",
-            ),
+            email_length=email_length,
             default_max_results=cls._parse_positive_int(
                 gmail_table.get("default_max_results"),
                 field_name="services.gmail.default_max_results",
@@ -321,7 +277,7 @@ class ConfigService:
             cls._parse_optional_str(
                 luckmail_table.get("base_url"),
                 field_name="services.luckmail.base_url",
-                default=DEFAULT_LUCKMAIL_BASE_URL,
+                default="https://mails.luckyous.com",
             ),
             "services.luckmail.base_url",
         )
@@ -329,12 +285,6 @@ class ConfigService:
         api_key = cls._parse_required_str(
             luckmail_table.get("api_key"),
             field_name="services.luckmail.api_key",
-        )
-
-        timeout_seconds = cls._parse_positive_int(
-            luckmail_table.get("timeout_seconds"),
-            field_name="services.luckmail.timeout_seconds",
-            default=30,
         )
 
         project_code = cls._parse_required_str(
@@ -360,7 +310,6 @@ class ConfigService:
         return LuckMailConfig(
             base_url=base_url,
             api_key=api_key,
-            timeout_seconds=timeout_seconds,
             project_code=project_code,
             email_type=email_type,
             variant_mode=variant_mode,
@@ -377,11 +326,7 @@ class ConfigService:
         if not isinstance(mail_table, dict):
             raise ConfigError("[services.mail] 必须是表结构")
 
-        provider = cls._parse_optional_str(
-            mail_table.get("provider"),
-            field_name="services.mail.provider",
-            default=DEFAULT_MAIL_PROVIDER,
-        ).lower()
+        provider = cls._parse_optional_str(mail_table.get("provider"), field_name="services.mail.provider", default="duckmail").lower()
         return MailConfig(provider=provider)
 
     @classmethod
@@ -408,12 +353,17 @@ class ConfigService:
         domain_index = cls._parse_non_negative_int(
             freemail_table.get("domain_index"),
             field_name="services.freemail.domain_index",
-            default=DEFAULT_FREEMAIL_DOMAIN_INDEX,
+            default=0,
         )
         max_probe_emails = cls._parse_positive_int(
             freemail_table.get("max_probe_emails"),
             field_name="services.freemail.max_probe_emails",
-            default=DEFAULT_FREEMAIL_MAX_PROBE_EMAILS,
+            default=10,
+        )
+        email_length = cls._parse_positive_int(
+            freemail_table.get("email_length"),
+            field_name="services.freemail.email_length",
+            default=8,
         )
         if max_probe_emails > 50:
             raise ConfigError("字段 `services.freemail.max_probe_emails` 不能大于 50")
@@ -423,7 +373,58 @@ class ConfigService:
             admin_token=admin_token,
             domain_index=domain_index,
             max_probe_emails=max_probe_emails,
+            email_length=email_length,
         )
+
+    @classmethod
+    def _parse_duckmail_config(cls, services_table, base_dir: Path) -> DuckMailConfig | None:
+        duckmail_table = services_table.get("duckmail")
+        if duckmail_table is None:
+            return None
+        if not isinstance(duckmail_table, dict):
+            raise ConfigError("[services.duckmail] 必须是表结构")
+        gmail_table = duckmail_table.get("gmail", {})
+        gmail_api_table = cls._require_table(
+            gmail_table,
+            "api",
+            full_name="services.duckmail.gmail.api",
+        )
+        raw_email = gmail_table.get("email")
+        gmail_email = cls._parse_email(raw_email, field_name="services.gmail.email")
+
+        gmail_api_config = GmailApiConfig(
+            credentials_file=cls._parse_required_path(
+                gmail_api_table.get("credentials_file"),
+                field_name="services.duckmail.gmail.api.credentials_file",
+                base_dir=base_dir,
+            ),
+            token_dir=cls._parse_token_dir(gmail_api_table, base_dir, api_field_name_prefix="services.duckmail.gmail.api"),
+            scopes=cls._parse_scopes(gmail_api_table.get("scopes"), api_field_name_prefix="services.duckmail.gmail.api"),
+        )
+
+        gmail_config = GmailConfig(
+            email=gmail_email,
+            api=gmail_api_config,
+            default_max_results=cls._parse_positive_int(
+                gmail_table.get("default_max_results"),
+                field_name="services.duckmail.gmail.default_max_results",
+                default=20,
+            ),
+        )
+
+        base_url = _normalize_base_url(
+            cls._parse_required_str(
+                duckmail_table.get("base_url"),
+                field_name="services.duckmail.base_url",
+            ),
+            "services.duckmail.base_url",
+        )
+
+        authorization_token = cls._parse_required_str(
+            duckmail_table.get("authorization_token"),
+            field_name="services.duckmail.authorization_token",
+        )
+        return DuckMailConfig(gmail=gmail_config, base_url=base_url, authorization_token=authorization_token)
 
     @classmethod
     def _parse_http_config(cls, services_table: dict[str, Any]) -> HttpConfig:
@@ -446,12 +447,12 @@ class ConfigService:
         timeout_seconds = cls._parse_positive_int(
             http_table.get("timeout_seconds"),
             field_name="services.http.timeout_seconds",
-            default=DEFAULT_HTTP_TIMEOUT_SECONDS,
+            default=60,
         )
         verify_ssl = cls._parse_optional_bool(
             http_table.get("verify_ssl"),
             field_name="services.http.verify_ssl",
-            default=DEFAULT_HTTP_VERIFY_SSL,
+            default=True,
         )
         user_agent = cls._parse_optional_str(
             http_table.get("user_agent"),
@@ -561,12 +562,20 @@ class ConfigService:
             field_name="registers.openai.headless",
             default=False,
         )
+
+        default_account_password = cls._parse_optional_nullable_str(
+            openai_register_table.get("default_account_password"),
+            field_name="registers.openai.default_account_password",
+            default=None,
+        )
+
         return OpenAIRegisterConfig(
             oauth_client_id=oauth_client_id,
             default_timeout_seconds=default_timeout_seconds,
             callback_server_port=callback_server_port,
             chrome_binary_path=chrome_binary_path,
-            headless=headless
+            headless=headless,
+            default_account_password=default_account_password,
         )
 
     @classmethod
@@ -595,14 +604,14 @@ class ConfigService:
         )
 
     @classmethod
-    def _parse_token_dir(cls, api_table: dict[str, Any], base_dir: Path) -> Path:
+    def _parse_token_dir(cls, api_table: dict[str, Any], base_dir: Path, api_field_name_prefix: str = "services.gmail.api") -> Path:
         """解析 token 目录，兼容旧字段 token_file。"""
 
         token_dir_raw = api_table.get("token_dir")
         if token_dir_raw is not None:
             return cls._parse_required_path(
                 token_dir_raw,
-                field_name="services.gmail.api.token_dir",
+                field_name=f"{api_field_name_prefix}.token_dir",
                 base_dir=base_dir,
             )
 
@@ -610,12 +619,12 @@ class ConfigService:
         if token_file_raw is not None:
             token_file = cls._parse_required_path(
                 token_file_raw,
-                field_name="services.gmail.api.token_file",
+                field_name=f"{api_field_name_prefix}.token_file",
                 base_dir=base_dir,
             )
             return token_file.parent
 
-        raise ConfigError("字段 `services.gmail.api.token_dir` 必填")
+        raise ConfigError(f"字段 `{api_field_name_prefix}.token_dir` 必填")
 
     @staticmethod
     def _require_table(data: dict[str, Any], key: str, full_name: str | None = None) -> dict[str, Any]:
@@ -731,7 +740,7 @@ class ConfigService:
         return output
 
     @staticmethod
-    def _parse_scopes(value: Any) -> tuple[str, ...]:
+    def _parse_scopes(value: Any, api_field_name_prefix: str = "services.gmail.api") -> tuple[str, ...]:
         if value is None:
             return DEFAULT_GMAIL_SCOPES
 
@@ -739,12 +748,12 @@ class ConfigService:
             value = [value]
 
         if not isinstance(value, list) or not value:
-            raise ConfigError("字段 `services.gmail.api.scopes` 必须是字符串数组或字符串")
+            raise ConfigError(f"字段 `{api_field_name_prefix}.scopes` 必须是字符串数组或字符串")
 
         scopes: list[str] = []
         for item in value:
             if not isinstance(item, str) or not item.strip():
-                raise ConfigError("`services.gmail.api.scopes` 中每个元素都必须是非空字符串")
+                raise ConfigError(f"`{api_field_name_prefix}.scopes` 中每个元素都必须是非空字符串")
             scopes.append(item)
 
         return tuple(scopes)

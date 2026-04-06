@@ -3,11 +3,9 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from pyexpat.errors import messages
 
 from service.config_service import ConfigError, ConfigService
-from service.gmail_service import GmailService
-from service.mail_service import MailService
+from service.mail.gmail_service import GmailService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,8 +82,8 @@ def main() -> int:
         gmail_service = GmailService.from_config_file(args.config)
         print("[GMailService] 初始化成功")
 
-        messages = gmail_service.list_messages(query="from:openai.com subject:ChatGPT")
-        message = gmail_service.get_message(messages[0].id)
+        messages = gmail_service._list_messages(query="from:openai.com subject:ChatGPT")
+        message = gmail_service._get_message(messages[0].id)
 
 
         return 0

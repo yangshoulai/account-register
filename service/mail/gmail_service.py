@@ -7,18 +7,17 @@ import string
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from pathlib import Path
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Literal
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 
-from .config_service import ConfigService, GmailConfig
+from service.base_mail_service import MailFilter, BaseMailService, MailBox
+from service.config_service import GmailConfig
 
 MessageFormat = Literal["minimal", "full", "raw", "metadata"]
-MailFilter = Callable[[str, str, str], bool]
 DEFAULT_USER_ID = "me"
 _OTP_PATTERN = re.compile(r"(?<!\d)(\d{4,8})(?!\d)")
 
@@ -31,118 +30,14 @@ class MessageRef:
     thread_id: str
 
 
-class GmailService:
+class GmailService(BaseMailService):
     """Gmail 业务服务，负责邮件查询与删除。"""
 
     def __init__(self, config: GmailConfig, client: Resource | None = None):
         self._config = config
         self._client = client or self._build_client(config)
 
-    @classmethod
-    def from_config_file(cls, config_file: str | Path = "config.toml") -> "GmailService":
-        """从配置文件加载 GmailConfig 并创建服务实例。"""
-
-        gmail_config = ConfigService.get_gmail_config(config_file)
-        return cls(config=gmail_config)
-
-    @property
-    def config(self) -> GmailConfig:
-        """返回服务当前使用的 Gmail 配置。"""
-
-        return self._config
-
-    def list_messages(
-            self,
-            query: str | None = None,
-            max_results: int | None = None,
-            include_spam_trash: bool = False,
-    ) -> list[MessageRef]:
-        """获取邮件列表（仅返回邮件 ID 与线程 ID）。"""
-
-        resolved_query = query if query is not None else self._config.default_query
-        resolved_max_results = (
-            max_results
-            if max_results is not None
-            else self._config.default_max_results
-        )
-
-        if resolved_max_results <= 0:
-            raise ValueError("max_results 必须大于 0")
-
-        request_kwargs: dict[str, Any] = {
-            "userId": DEFAULT_USER_ID,
-            "maxResults": resolved_max_results,
-            "includeSpamTrash": include_spam_trash,
-        }
-        if resolved_query:
-            request_kwargs["q"] = resolved_query
-
-        response = self._client.users().messages().list(**request_kwargs).execute()
-        return [
-            MessageRef(id=item["id"], thread_id=item["threadId"])
-            for item in response.get("messages", [])
-        ]
-
-    def get_message(self, message_id: str, fmt: MessageFormat = "full") -> dict[str, Any]:
-        """根据邮件 ID 获取邮件详情。"""
-
-        return (
-            self._client.users()
-            .messages()
-            .get(userId=DEFAULT_USER_ID, id=message_id, format=fmt)
-            .execute()
-        )
-
-    def get_latest_verification_code(
-            self,
-            mail_filter: MailFilter,
-            *,
-            query: str | None = None,
-            max_results: int | None = None,
-            include_spam_trash: bool = False,
-    ) -> str:
-        """
-        获取最近一次验证码。
-
-        mail_filter 回调入参顺序固定为：
-        1) from（发件人）
-        2) subject（邮件主题）
-        3) receive_at（yyyy-mm-dd HH:mm:ss）
-        """
-
-        if not callable(mail_filter):
-            raise ValueError("mail_filter 必须是可调用对象")
-
-        message_refs = self.list_messages(
-            query=query,
-            max_results=max_results,
-            include_spam_trash=include_spam_trash,
-        )
-        if not message_refs:
-            return ""
-
-        candidates: list[tuple[int, str]] = []
-        for item in message_refs:
-            message = self.get_message(item.id, fmt="full")
-            mail_from = self._extract_from(message)
-            subject = self._extract_subject(message)
-            receive_at = self._format_receive_at(message)
-            if not mail_filter(mail_from, subject, receive_at):
-                continue
-
-            code = self._extract_verification_code(message)
-            if not code:
-                continue
-
-            candidates.append((self._extract_internal_timestamp(message), code))
-
-        if not candidates:
-            return ""
-
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return candidates[0][1]
-
-    def generate_mail_box(self, *, length: int = 8, alias: str | None = None) -> str:
+    def generate_mail_box(self) -> MailBox:
         """
         基于当前配置邮箱生成新的 Gmail 别名邮箱。
 
@@ -154,60 +49,70 @@ class GmailService:
         local_part, domain = base_email.split("@", 1)
         base_local = local_part.split("+", 1)[0]
 
-        if alias is not None:
-            clean_alias = self._normalize_alias(alias)
-        else:
-            if length <= 0:
-                raise ValueError("length 必须大于 0")
-            clean_alias = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(length))
+        clean_alias = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(self._config.email_length))
 
-        return f"{base_local}+{clean_alias}@{domain}"
+        return MailBox(email=f"{base_local}+{clean_alias}@{domain}")
 
-    def delete_message(self, message_id: str, permanently: bool = False) -> dict[str, Any]:
-        """删除邮件。默认移入垃圾箱，permanently=True 时永久删除。"""
+    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None) -> str:
+        """
+        获取最近一次验证码。
 
-        if permanently:
-            response = (
-                self._client.users()
-                .messages()
-                .delete(userId=DEFAULT_USER_ID, id=message_id)
-                .execute()
-            )
-            return response or {}
+        mail_filter 回调入参顺序固定为：
+        1) from（发件人）
+        2) subject（邮件主题）
+        3) receive_at（yyyy-mm-dd HH:mm:ss）
+        """
+
+        if mail_filter and not callable(mail_filter):
+            raise ValueError("mail_filter 必须是可调用对象")
+
+        message_refs = self._list_messages(query=f"to:{mail_box.email}")
+        if not message_refs:
+            return ""
+
+        candidates: list[tuple[int, str]] = []
+        for item in message_refs:
+            message = self._get_message(item.id, fmt="full")
+            mail_from = self._extract_from(message)
+            subject = self._extract_subject(message)
+            receive_at = self._format_receive_at(message)
+            if mail_filter and not mail_filter(mail_from, subject, receive_at):
+                continue
+
+            code = self._extract_verification_code(message)
+            if not code:
+                continue
+            candidates.append((self._extract_internal_timestamp(message), code))
+
+        if not candidates:
+            return ""
+        return candidates[0][1]
+
+    def _list_messages(self, query: str | None = None) -> list[MessageRef]:
+        """获取邮件列表（仅返回邮件 ID 与线程 ID）。"""
+        request_kwargs: dict[str, Any] = {
+            "userId": DEFAULT_USER_ID,
+            "maxResults": self._config.default_max_results,
+            "includeSpamTrash": True,
+        }
+        if query:
+            request_kwargs["q"] = query
+
+        response = self._client.users().messages().list(**request_kwargs).execute()
+        return [
+            MessageRef(id=item["id"], thread_id=item["threadId"])
+            for item in response.get("messages", [])
+        ]
+
+    def _get_message(self, message_id: str, fmt: MessageFormat = "full") -> dict[str, Any]:
+        """根据邮件 ID 获取邮件详情。"""
 
         return (
             self._client.users()
             .messages()
-            .trash(userId=DEFAULT_USER_ID, id=message_id)
+            .get(userId=DEFAULT_USER_ID, id=message_id, format=fmt)
             .execute()
         )
-
-    def delete_messages(
-            self,
-            message_ids: Sequence[str],
-            permanently: bool = False,
-    ) -> dict[str, Any]:
-        """批量删除邮件。"""
-
-        if not message_ids:
-            return {"deleted": 0, "details": []}
-
-        if permanently:
-            response = (
-                self._client.users()
-                .messages()
-                .batchDelete(
-                    userId=DEFAULT_USER_ID,
-                    body={"ids": list(message_ids)},
-                )
-                .execute()
-            )
-            return {"deleted": len(message_ids), "details": response or {}}
-
-        details: list[dict[str, Any]] = []
-        for message_id in message_ids:
-            details.append(self.delete_message(message_id=message_id, permanently=False))
-        return {"deleted": len(message_ids), "details": details}
 
     @staticmethod
     def extract_text_from_message(message: dict) -> str:

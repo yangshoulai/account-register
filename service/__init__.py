@@ -13,7 +13,7 @@ from .config_service import (
 
 def __getattr__(name: str):
     if name in {"GmailService", "MessageRef"}:
-        from .gmail_service import GmailService, MessageRef
+        from service.mail.gmail_service import GmailService, MessageRef
 
         exports = {
             "GmailService": GmailService,
@@ -22,7 +22,7 @@ def __getattr__(name: str):
         return exports[name]
 
     if name in {"LuckMailService", "LuckMailApiError", "LuckMailHttpResult"}:
-        from .luckmail_service import LuckMailApiError, LuckMailHttpResult, LuckMailService
+        from service.mail.luckmail_service import LuckMailApiError, LuckMailHttpResult, LuckMailService
 
         exports = {
             "LuckMailService": LuckMailService,
@@ -32,7 +32,7 @@ def __getattr__(name: str):
         return exports[name]
 
     if name in {"FreeMailService", "FreeMailApiError", "FreeMailEmailSummary", "FreeMailEmailContent"}:
-        from .freemail_service import (
+        from service.mail.freemail_service import (
             FreeMailApiError,
             FreeMailEmailContent,
             FreeMailEmailSummary,
