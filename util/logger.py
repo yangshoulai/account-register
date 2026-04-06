@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from typing import Any
@@ -20,7 +21,9 @@ class _SingleLineFormatter(logging.Formatter):
     """将普通日志压成单行，避免 RichHandler 的自动换行效果。"""
 
     def format(self, record: logging.LogRecord) -> str:
-        record.message = self._normalize_text(record.getMessage())
+        preserve_newlines = bool(getattr(record, "preserve_newlines", False))
+        message = record.getMessage()
+        record.message = message if preserve_newlines else self._normalize_text(message)
         record.levelshort = self._format_level(record.levelno)
         if self.usesTime():
             record.asctime = self.formatTime(record, self.datefmt)
@@ -28,12 +31,16 @@ class _SingleLineFormatter(logging.Formatter):
         rendered = self.formatMessage(record)
 
         if record.exc_info:
-            exc_text = self._normalize_text(self.formatException(record.exc_info))
+            exc_text = self.formatException(record.exc_info)
+            if not preserve_newlines:
+                exc_text = self._normalize_text(exc_text)
             if exc_text:
                 rendered = f"{rendered} | {exc_text}"
 
         if record.stack_info:
-            stack_text = self._normalize_text(self.formatStack(record.stack_info))
+            stack_text = self.formatStack(record.stack_info)
+            if not preserve_newlines:
+                stack_text = self._normalize_text(stack_text)
             if stack_text:
                 rendered = f"{rendered} | {stack_text}"
 
@@ -41,7 +48,8 @@ class _SingleLineFormatter(logging.Formatter):
 
     @staticmethod
     def _normalize_text(text: str) -> str:
-        return " ".join(part.strip() for part in text.replace("\r", "\n").split("\n") if part.strip())
+        # return " ".join(part.strip() for part in text.replace("\r", "\n").split("\n") if part.strip())
+        return text
 
     @staticmethod
     def _format_level(levelno: int) -> str:
@@ -87,6 +95,21 @@ class Logger:
 
     def info(self, message: str, *args: Any, **kwargs: Any) -> None:
         self._logger.info(message, *args, **kwargs)
+
+    def info_multiline(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """保留换行的 INFO 日志。"""
+
+        extra = dict(kwargs.pop("extra", {}) or {})
+        extra["preserve_newlines"] = True
+        self._logger.info(message, *args, extra=extra, **kwargs)
+
+    def info_pretty(self, data: Any, prefix: str | None = None) -> None:
+        """以 JSON 美化形式输出多行 INFO 日志。"""
+
+        rendered = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+        if prefix:
+            rendered = f"{prefix}\n{rendered}"
+        self.info_multiline(rendered)
 
     def success(self, message: str, *args: Any, **kwargs: Any) -> None:
         """成功日志。"""
