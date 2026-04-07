@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from service.base_mail_service import MailFilter, BaseMailService, MailBox
-from service.config_service import ConfigService, HttpConfig, LuckMailConfig
+from service.config_service import HttpConfig, LuckMailConfig
 from service.http_service import HttpService, HttpServiceError
 
 

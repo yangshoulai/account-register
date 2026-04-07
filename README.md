@@ -15,6 +15,7 @@
 ```toml
 [services.gmail]
 email = "your.email@gmail.com"
+proxy = "http://127.0.0.1:7890" # 可选，仅 Gmail API / OAuth 使用
 default_query = "is:inbox"
 default_max_results = 20
 
@@ -52,6 +53,8 @@ verify_ssl = true
 [services.http.default_headers]
 Accept-Language = "zh-CN,zh;q=0.9,en;q=0.8"
 ```
+
+> 如果给 Gmail 配置了 `proxy`，运行环境需要安装 `PySocks`。
 
 ## HttpService 说明
 

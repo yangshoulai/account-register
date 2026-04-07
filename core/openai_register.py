@@ -275,7 +275,6 @@ class OpenAIRegister:
             if btn_resend:
                 await btn_resend.wait_until(is_visible=True, is_interactable=True, timeout=10)
                 LOGGER.info("点击重新发送验证码")
-                received_after = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 await btn_resend.click(humanize=True)
                 LOGGER.info("等待验证码")
                 code = await self._wait_for_verify_code(mail_box, received_after=received_after, timeout=timeout)

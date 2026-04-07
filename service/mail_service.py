@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from .base_mail_service import MailFilter, BaseMailService, MailBox
-from .config_service import ConfigService, MailConfig
 from service.mail.duckmail_service import DuckMailService
 from service.mail.freemail_service import FreeMailService
 from service.mail.gmail_service import GmailService
-from .http_service import HttpService
 from service.mail.luckmail_service import LuckMailService
+from .base_mail_service import MailFilter, BaseMailService, MailBox
+from .config_service import ConfigService, MailConfig
+from .http_service import HttpService
+from .mail.firefoxrelay_service import FirefoxRelayService
 
 
 class MailServiceError(RuntimeError):
@@ -26,6 +25,7 @@ class MailService(BaseMailService):
                  freemail_service: FreeMailService | None = None,
                  gmail_service: GmailService | None = None,
                  duckmail_service: DuckMailService | None = None,
+                 firefoxrelay_service: FirefoxRelayService | None = None
                  ):
         provider = config.provider.strip().lower()
         if not provider:
@@ -38,6 +38,8 @@ class MailService(BaseMailService):
             raise ValueError("provider=gmail 时必须传入 gmail_service")
         if provider == "duckmail" and duckmail_service is None:
             raise ValueError("provider=duckmail 时必须传入 duckmail_service")
+        if provider == "firefoxrelay" and not firefoxrelay_service:
+            raise MailServiceError("provider=firefoxrelay 时缺少 firefoxrelay_service")
 
         if provider == "luckmail":
             self._mail_provider = luckmail_service
@@ -47,6 +49,8 @@ class MailService(BaseMailService):
             self._mail_provider = gmail_service
         elif provider == "duckmail":
             self._mail_provider = duckmail_service
+        elif provider == "firefoxrelay":
+            self._mail_provider = firefoxrelay_service
         else:
             raise MailServiceError(f"暂不支持的邮件服务 provider: {provider}")
 
@@ -84,9 +88,20 @@ class MailService(BaseMailService):
         if provider == "duckmail":
             if app_config.duckmail is None:
                 raise MailServiceError("provider=duckmail 时缺少 [services.duckmail] 配置")
+            if app_config.gmail is None:
+                raise MailServiceError("provider=duckmail 时缺少 [services.gmail] 配置")
             return cls(
                 config=app_config.mail,
-                duckmail_service=DuckMailService(app_config.duckmail, http_service),
+                duckmail_service=DuckMailService(app_config.duckmail, http_service, GmailService(app_config.gmail)),
+            )
+        if provider == "firefoxrelay":
+            if app_config.firefoxrelay is None:
+                raise MailServiceError("provider=firefoxrelay 时缺少 [services.firefoxrelay] 配置")
+            if app_config.gmail is None:
+                raise MailServiceError("provider=duckmail 时缺少 [services.gmail] 配置")
+            return cls(
+                config=app_config.mail,
+                firefoxrelay_service=FirefoxRelayService(app_config.firefoxrelay, http_service, GmailService(app_config.gmail)),
             )
 
         raise MailServiceError(f"暂不支持的邮件服务 provider: {provider}")

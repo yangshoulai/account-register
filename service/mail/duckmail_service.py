@@ -7,9 +7,9 @@ from service.mail.gmail_service import GmailService
 class DuckMailService(BaseMailService):
     """DuckMail 服务封装。"""
 
-    def __init__(self, config: DuckMailConfig, http_service: HttpService):
+    def __init__(self, config: DuckMailConfig, http_service: HttpService, gmail_service: GmailService):
         self._config = config
-        self._gmail_service = GmailService(config=config.gmail)
+        self._gmail_service = gmail_service
         self._http_service = http_service
         self._headers = {
             "authorization": f"Bearer {self._config.authorization_token}",

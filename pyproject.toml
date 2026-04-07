@@ -9,5 +9,6 @@ dependencies = [
   "google-auth-httplib2>=0.2.0",
   "google-auth-oauthlib>=1.2.2",
   "pydoll-python>=2.21.3",
+  "pysocks>=1.7.1",
   "rich>=14.3.3",
 ]

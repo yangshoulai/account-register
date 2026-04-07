@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-import tomllib
 
 DEFAULT_GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.modify",)
 DEFAULT_HTTP_USER_AGENT = (
@@ -73,6 +73,7 @@ class GmailConfig:
     email: str
     email_length: int = 8
     default_max_results: int = 20
+    proxy: str | None = None
 
     def resolve_token_file(self) -> Path:
         """获取当前邮箱对应的 token 文件路径。"""
@@ -113,7 +114,15 @@ class DuckMailConfig:
     """DuckMail API 配置。"""
     base_url: str
     authorization_token: str
-    gmail: GmailConfig
+    forward_gmail: str
+
+
+@dataclass(frozen=True)
+class FirefoxRelayConfig:
+    session_id: str
+    csrf_token: str
+    forward_gmail: str
+    base_url: str = "https://relay.firefox.com"
 
 
 @dataclass(frozen=True)
@@ -171,6 +180,7 @@ class AppConfig:
     luckmail: LuckMailConfig | None = None
     freemail: FreeMailConfig | None = None
     duckmail: DuckMailConfig | None = None
+    firefoxrelay: FirefoxRelayConfig | None = None
 
     mail: MailConfig = field(default_factory=MailConfig)
     http: HttpConfig = field(default_factory=HttpConfig)
@@ -206,14 +216,17 @@ class ConfigService:
         luckmail_config = None
         freemail_config = None
         duckmail_config = None
+        firefoxrelay_config = None
         if mail_config.provider == "freemail":
             freemail_config = cls._parse_freemail_config(services_table)
         elif mail_config.provider == "luckmail":
             luckmail_config = cls._parse_luckmail_config(services_table)
         elif mail_config.provider == "duckmail":
-            duckmail_config = cls._parse_duckmail_config(services_table, base_dir=base_dir)
+            duckmail_config = cls._parse_duckmail_config(services_table)
         elif mail_config.provider == "gmail":
             gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
+        elif mail_config.provider == "firefoxrelay":
+            firefoxrelay_config = cls._parse_firefoxrelay_config(services_table)
 
         http_config = cls._parse_http_config(services_table)
         cpa_config = cls._parse_cpa_config(services_table)
@@ -226,6 +239,7 @@ class ConfigService:
             luckmail=luckmail_config,
             freemail=freemail_config,
             duckmail=duckmail_config,
+            firefoxrelay=firefoxrelay_config,
             mail=mail_config,
             http=http_config,
             openai_register=openai_register_config,
@@ -233,22 +247,16 @@ class ConfigService:
         )
 
     @classmethod
-    def _parse_gmail_config(cls, services_table: dict[str, Any], base_dir: Path) -> GmailConfig:
-        gmail_table = cls._require_table(services_table, "gmail", full_name="services.gmail")
-        gmail_api_table = cls._require_table(
-            gmail_table,
-            "api",
-            full_name="services.gmail.api",
-        )
-
+    def _parse_gmail_config_from_gmail_table(cls, services_table: dict[str, Any], base_dir: Path, config_prefix: str = "services"):
+        gmail_table = cls._require_table(services_table, "gmail", full_name=f"{config_prefix}.gmail")
+        gmail_api_table = cls._require_table(gmail_table, "api", full_name=f"{config_prefix}.gmail.api")
         raw_email = gmail_table.get("email")
-        gmail_email = cls._parse_email(raw_email, field_name="services.gmail.email")
-        email_length = cls._parse_positive_int(gmail_table.get("email_length"), "services.gmail.email_length", default=8)
-
+        gmail_email = cls._parse_email(raw_email, field_name=f"{config_prefix}.gmail.email")
+        email_length = cls._parse_positive_int(gmail_table.get("email_length"), f"{config_prefix}.gmail.email_length", default=8)
         gmail_api_config = GmailApiConfig(
             credentials_file=cls._parse_required_path(
                 gmail_api_table.get("credentials_file"),
-                field_name="services.gmail.api.credentials_file",
+                field_name=f"{config_prefix}.gmail.api.credentials_file",
                 base_dir=base_dir,
             ),
             token_dir=cls._parse_token_dir(gmail_api_table, base_dir),
@@ -261,10 +269,19 @@ class ConfigService:
             email_length=email_length,
             default_max_results=cls._parse_positive_int(
                 gmail_table.get("default_max_results"),
-                field_name="services.gmail.default_max_results",
+                field_name=f"{config_prefix}.gmail.default_max_results",
                 default=20,
             ),
+            proxy=cls._parse_optional_nullable_str(
+                gmail_table.get("proxy"),
+                field_name=f"{config_prefix}.gmail.proxy",
+                default=None,
+            ),
         )
+
+    @classmethod
+    def _parse_gmail_config(cls, services_table: dict[str, Any], base_dir: Path) -> GmailConfig:
+        return cls._parse_gmail_config_from_gmail_table(services_table, base_dir, "services")
 
     @classmethod
     def _parse_luckmail_config(cls, services_table: dict[str, Any]) -> LuckMailConfig | None:
@@ -378,41 +395,8 @@ class ConfigService:
         )
 
     @classmethod
-    def _parse_duckmail_config(cls, services_table, base_dir: Path) -> DuckMailConfig | None:
-        duckmail_table = services_table.get("duckmail")
-        if duckmail_table is None:
-            return None
-        if not isinstance(duckmail_table, dict):
-            raise ConfigError("[services.duckmail] 必须是表结构")
-        gmail_table = duckmail_table.get("gmail", {})
-        gmail_api_table = cls._require_table(
-            gmail_table,
-            "api",
-            full_name="services.duckmail.gmail.api",
-        )
-        raw_email = gmail_table.get("email")
-        gmail_email = cls._parse_email(raw_email, field_name="services.gmail.email")
-
-        gmail_api_config = GmailApiConfig(
-            credentials_file=cls._parse_required_path(
-                gmail_api_table.get("credentials_file"),
-                field_name="services.duckmail.gmail.api.credentials_file",
-                base_dir=base_dir,
-            ),
-            token_dir=cls._parse_token_dir(gmail_api_table, base_dir, api_field_name_prefix="services.duckmail.gmail.api"),
-            scopes=cls._parse_scopes(gmail_api_table.get("scopes"), api_field_name_prefix="services.duckmail.gmail.api"),
-        )
-
-        gmail_config = GmailConfig(
-            email=gmail_email,
-            api=gmail_api_config,
-            default_max_results=cls._parse_positive_int(
-                gmail_table.get("default_max_results"),
-                field_name="services.duckmail.gmail.default_max_results",
-                default=20,
-            ),
-        )
-
+    def _parse_duckmail_config(cls, services_table) -> DuckMailConfig | None:
+        duckmail_table = cls._require_table(services_table, "duckmail", "services.duckmail")
         base_url = _normalize_base_url(
             cls._parse_required_str(
                 duckmail_table.get("base_url"),
@@ -425,7 +409,39 @@ class ConfigService:
             duckmail_table.get("authorization_token"),
             field_name="services.duckmail.authorization_token",
         )
-        return DuckMailConfig(gmail=gmail_config, base_url=base_url, authorization_token=authorization_token)
+        forward_gmail = cls._parse_required_str(
+            duckmail_table.get("forward_gmail"),
+            field_name="services.duckmail.forward_gmail",
+        )
+        return DuckMailConfig(base_url=base_url, authorization_token=authorization_token, forward_gmail=forward_gmail)
+
+    @classmethod
+    def _parse_firefoxrelay_config(cls, services_table: dict[str, Any]) -> FirefoxRelayConfig | None:
+        firefoxrelay_table = cls._require_table(services_table, "firefoxrelay", "services.firefoxrelay")
+
+        base_url = _normalize_base_url(
+            cls._parse_required_str(
+                firefoxrelay_table.get("base_url"),
+                field_name="services.firefoxrelay.base_url",
+            ),
+            "services.firefoxrelay.base_url",
+        )
+
+        session_id = cls._parse_required_str(
+            firefoxrelay_table.get("session_id"),
+            field_name="services.firefoxrelay.session_id",
+        )
+
+        csrf_token = cls._parse_required_str(
+            firefoxrelay_table.get("csrf_token"),
+            field_name="services.firefoxrelay.csrf_token",
+        )
+
+        forward_gmail = cls._parse_required_str(
+            firefoxrelay_table.get("forward_gmail"),
+            field_name="services.firefoxrelay.forward_gmail",
+        )
+        return FirefoxRelayConfig(base_url=base_url, session_id=session_id, csrf_token=csrf_token, forward_gmail=forward_gmail)
 
     @classmethod
     def _parse_http_config(cls, services_table: dict[str, Any]) -> HttpConfig:

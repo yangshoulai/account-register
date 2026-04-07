@@ -9,6 +9,9 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
+import google_auth_httplib2
+import httplib2
+import requests
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -218,11 +221,39 @@ class GmailService(BaseMailService):
         return normalized
 
     @staticmethod
+    def _build_proxy_session(proxy: str | None) -> requests.Session | None:
+        """根据代理地址构建 requests 会话。"""
+
+        if not proxy:
+            return None
+
+        session = requests.Session()
+        session.proxies.update({
+            "http": proxy,
+            "https": proxy,
+        })
+        return session
+
+    @staticmethod
+    def _build_google_http(proxy: str | None, creds: Credentials) -> google_auth_httplib2.AuthorizedHttp:
+        """构建带鉴权的 Gmail HTTP 传输对象。"""
+
+        proxy_info = None
+        if proxy:
+            if httplib2.socks is None:
+                raise RuntimeError("当前环境缺少 PySocks，无法为 Gmail API 启用代理")
+            proxy_info = httplib2.proxy_info_from_url(proxy, method="https")
+
+        http = httplib2.Http(proxy_info=proxy_info)
+        return google_auth_httplib2.AuthorizedHttp(creds, http=http)
+
+    @staticmethod
     def _build_client(config: GmailConfig) -> Resource:
         """根据当前邮箱配置创建 Gmail API 客户端，并自动处理 token 刷新。"""
 
         creds: Credentials | None = None
         api_config = config.api
+        proxy_session = GmailService._build_proxy_session(config.proxy)
 
         credentials_file = config.resolve_credentials_file()
         token_file = config.resolve_token_file()
@@ -235,15 +266,18 @@ class GmailService(BaseMailService):
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                creds.refresh(Request(session=proxy_session) if proxy_session else Request())
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     str(credentials_file),
                     list(api_config.scopes),
                 )
+                if proxy_session:
+                    flow.oauth2session.proxies.update(dict(proxy_session.proxies))
                 creds = flow.run_local_server(port=0)
 
             token_file.parent.mkdir(parents=True, exist_ok=True)
             token_file.write_text(creds.to_json(), encoding="utf-8")
 
-        return build("gmail", "v1", credentials=creds, cache_discovery=False)
+        authed_http = GmailService._build_google_http(config.proxy, creds)
+        return build("gmail", "v1", http=authed_http, cache_discovery=False)
