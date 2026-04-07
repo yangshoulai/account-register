@@ -153,6 +153,7 @@ class OpenAIRegisterConfig:
     callback_server_port: int = 1455
     chrome_binary_path: str | None = None
     headless: bool = False
+    user_agent: str = DEFAULT_HTTP_USER_AGENT
     default_account_password: str | None = None
 
     auth_file_dir: Path = field(default_factory=lambda: (Path.cwd() / "accounts").resolve())
@@ -555,6 +556,11 @@ class ConfigService:
             field_name="registers.openai.headless",
             default=False,
         )
+        user_agent = cls._parse_optional_nullable_str(
+            openai_register_table.get("user_agent"),
+            field_name="registers.openai.user_agent",
+            default=DEFAULT_HTTP_USER_AGENT,
+        )
 
         default_account_password = cls._parse_optional_nullable_str(
             openai_register_table.get("default_account_password"),
@@ -576,6 +582,7 @@ class ConfigService:
             callback_server_port=callback_server_port,
             chrome_binary_path=chrome_binary_path,
             headless=headless,
+            user_agent=user_agent,
             default_account_password=default_account_password,
             auth_file_dir=auth_file_dir,
         )

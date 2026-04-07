@@ -16,7 +16,7 @@ from typing import Any
 from pydoll.browser import Chrome
 from pydoll.browser.options import ChromiumOptions
 from pydoll.browser.tab import Tab
-from pydoll.constants import Key
+from pydoll.constants import Key, By
 
 from service.base_mail_service import MailBox, BaseMailService
 from service.config_service import ConfigService, OpenAIRegisterConfig
@@ -155,7 +155,8 @@ class CallbackServer:
         LOGGER.info("Callback server stopped")
 
 
-def _build_chrome_options(chrome_binary_path: str | None = None, headless: bool = False) -> ChromiumOptions:
+def _build_chrome_options(chrome_binary_path: str | None = None, headless: bool = False,
+                          ua: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36") -> ChromiumOptions:
     """构建浏览器启动参数。"""
 
     options = ChromiumOptions()
@@ -167,6 +168,8 @@ def _build_chrome_options(chrome_binary_path: str | None = None, headless: bool 
     options.add_argument("--disable-setuid-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+
+    options.add_argument(f"--user-agent={ua}")
 
     if chrome_binary_path:
         options.binary_location = chrome_binary_path
@@ -313,10 +316,8 @@ class OpenAIRegister:
 
     async def _start_register(self, tab: Tab) -> Account:
         """执行 ChatGPT 账号注册。"""
-
         await tab.go_to("https://chatgpt.com", timeout=self._config.default_timeout_seconds)
         LOGGER.info("访问 https://chatgpt.com")
-
         btn_login = await tab.query("//button[@data-testid='login-button']", timeout=10)
         await btn_login.wait_until(is_visible=True, is_interactable=True, timeout=10)
         LOGGER.info("点击登录按钮")
@@ -348,20 +349,15 @@ class OpenAIRegister:
         btn_submit = await tab.query("//button[@type='submit']", timeout=10)
         await btn_submit.wait_until(is_visible=True, is_interactable=True, timeout=10)
         LOGGER.info("点击提交按钮")
-
         received_after = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         await btn_submit.click(humanize=True)
 
-        input_password_or_code = await tab.query(
-            "//input[@name='new-password' or @name='code']",
-            timeout=self._config.default_timeout_seconds,
-        )
+        async with tab.expect_and_bypass_cloudflare_captcha(time_to_wait_captcha=10):
+            pass
+
+        input_password_or_code = await tab.query("//input[@name='new-password' or @name='code']", timeout=self._config.default_timeout_seconds)
         if await self._get_element_name(input_password_or_code) == "new-password":
-            await self._try_input_password_and_submit(
-                tab,
-                account.password,
-                password_expression="//input[@name='new-password']",
-            )
+            await self._try_input_password_and_submit(tab, account.password, password_expression="//input[@name='new-password']")
 
         input_code = await tab.query("//input[@name='code']", timeout=self._config.default_timeout_seconds)
         await input_code.wait_until(is_visible=True, is_interactable=False, timeout=10)
@@ -484,10 +480,7 @@ class OpenAIRegister:
     async def _start_oauth(self, tab: Tab, account: Account) -> tuple[OAuthStart, str]:
         """执行 Codex OAuth 流程。"""
 
-        oauth = openai_register_util.generate_oauth_url(
-            self._config.oauth_client_id,
-            self._config.callback_server_port,
-        )
+        oauth = openai_register_util.generate_oauth_url(self._config.oauth_client_id, self._config.callback_server_port)
         LOGGER.info(f"生成 OAuth 授权链接：{oauth.auth_url}")
         await self._try_get_consent_url(tab, account=account, oauth=oauth)
 
@@ -498,11 +491,7 @@ class OpenAIRegister:
 
         callback_host = f"localhost:{self._config.callback_server_port}"
         LOGGER.info("等待回调链接")
-        callback_url = await _wait_for_url(
-            tab,
-            url_flags=[callback_host],
-            timeout_sec=self._config.default_timeout_seconds,
-        )
+        callback_url = await _wait_for_url(tab, url_flags=[callback_host], timeout_sec=self._config.default_timeout_seconds)
         LOGGER.info(f"成功获取回调链接：{callback_url}")
         return oauth, callback_url
 
@@ -565,7 +554,7 @@ class OpenAIRegister:
         try:
             for i in range(register_num):
                 LOGGER.info(f"{'*' * 50} 开始第 {i + 1} / {register_num} 个注册流程 {'*' * 50}")
-                options = _build_chrome_options(headless=self._config.headless, chrome_binary_path=self._config.chrome_binary_path)
+                options = _build_chrome_options(headless=self._config.headless, chrome_binary_path=self._config.chrome_binary_path, ua=self._config.user_agent)
                 async with Chrome(options=options) as browser:
                     tab = await browser.start()
                     account = await self._start_register(tab)
