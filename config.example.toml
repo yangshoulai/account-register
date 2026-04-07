@@ -1,0 +1,121 @@
+# 使用说明：
+# 1. 请先将本文件复制并重命名为 config.toml
+# 2. 再将所有 <...> 占位内容替换为你自己的真实配置
+# 3. 未使用的邮箱服务配置可以保留，但相关字段请按实际情况修改
+
+[services.cpa]
+# CPA 管理接口基础地址
+base_url = "<CPA 管理接口基础地址>"
+# CPA 管理密码 / 管理令牌
+management_password = "<CPA 管理密码>"
+
+[services.http]
+# 通用 HTTP 默认 UA（会应用到 LuckMailService）
+user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+# 全局代理（优先级高于 http_proxy / https_proxy）
+proxy = "<全局代理地址，可留空>"
+# 按协议代理（当未配置 proxy 时生效；留空表示未单独配置）
+http_proxy = ""
+https_proxy = ""
+# 代理鉴权（可选；留空表示未配置）
+proxy_username = ""
+proxy_password = ""
+# curl-cffi 指纹模拟（可按需改为 chrome124 / chrome133 等）
+impersonate = "chrome136"
+# TLS JA3 指纹（可选；留空表示未配置）
+ja3 = ""
+# Akamai 指纹（可选；留空表示未配置）
+akamai = ""
+# 通用 HTTP 超时（秒）
+timeout_seconds = 60
+# 是否校验证书
+verify_ssl = true
+
+# 额外浏览器/指纹扩展参数（可选；默认空表）
+[services.http.extra_fp]
+
+# 通用默认请求头（会自动合并到每次请求）
+[services.http.default_headers]
+# 请求语言偏好
+Accept-Language = "zh-CN,zh;q=0.9,en;q=0.8"
+
+[services.gmail]
+# 当前使用的 Gmail 邮箱（用于生成 token 文件名）
+email = "<你的 Gmail 邮箱>"
+# Gmail API / OAuth 使用的代理（可选）
+proxy = "<Gmail 代理地址，可留空>"
+# 生成 Gmail 邮箱时别名的长度
+email_length = 8
+# 默认查询返回邮件数量
+default_max_results = 20
+
+[services.gmail.api]
+# 全局唯一 OAuth 客户端凭证文件（client_secret）
+credentials_file = "secrets/client_secret.json"
+# token 存储目录，最终 token 文件名固定为：<email>.json
+# 例如：your.email@gmail.com.json
+token_dir = "secrets/tokens"
+# 读取+删除邮件推荐权限
+scopes = ["https://www.googleapis.com/auth/gmail.modify"]
+
+[services.luckmail]
+# LuckMail API 基础地址
+base_url = "https://mails.luckyous.com/api/v1/openapi"
+# 用户 API Key（在 LuckMail 用户中心生成）
+api_key = "<LuckMail API Key>"
+# 项目编码
+project_code = "<LuckMail 项目编码>"
+# 邮箱类型
+email_type = "<邮箱类型，例如 ms_graph>"
+# 谷歌变种模式
+variant_mode = "<变种模式，可留空>"
+# 指定域名
+domain = "<指定域名，可留空>"
+
+[services.freemail]
+# FreeMail 服务地址
+base_url = "<FreeMail 服务地址>"
+# FreeMail 服务认证 token
+admin_token = "<FreeMail 管理 Token>"
+# 邮箱后缀域名索引
+domain_index = 0
+# 生成邮箱时别名的长度
+email_length = 8
+# 检查验证码时最多探测邮件数量
+max_probe_emails = 10
+
+[services.duckmail]
+# DuckMail 服务基础地址
+base_url = "https://quack.duckduckgo.com"
+# DuckMail 授权令牌
+authorization_token = "<DuckMail 授权令牌>"
+# DuckMail 邮件转发到的 Gmail 地址
+forward_gmail = "<用于接收 DuckMail 转发的 Gmail 地址>"
+
+[services.firefoxrelay]
+# Firefox Relay 服务基础地址
+base_url = "https://relay.firefox.com"
+# Firefox Relay 登录态 session_id
+session_id = "<Firefox Relay session_id>"
+# Firefox Relay 请求使用的 CSRF Token
+csrf_token = "<Firefox Relay CSRF Token>"
+# Firefox Relay 邮件转发到的 Gmail 地址
+forward_gmail = "<用于接收 Firefox Relay 转发的 Gmail 地址>"
+
+[registers.openai]
+# OpenAI OAuth 客户端 ID
+oauth_client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
+# 默认页面 / 接口等待超时（秒）
+default_timeout_seconds = 60
+# 本地 OAuth 回调服务监听端口
+callback_server_port = 1455
+# Chrome 可执行文件路径（留空表示使用系统默认）
+chrome_binary_path = ""
+# 是否以无头模式启动浏览器
+headless = false
+# 最终认证文件本地保存目录，默认是项目根目录下的 accounts
+auth_file_dir = "accounts"
+# 邮箱服务，当前支持：luckmail / freemail / gmail / duckmail / firefoxrelay
+mail_provider = "gmail"
+# 注册账号时使用的默认密码（留空表示运行时随机生成）
+default_account_password = "<默认注册密码，可留空>"
