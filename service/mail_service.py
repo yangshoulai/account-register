@@ -39,8 +39,8 @@ class MailService(BaseMailService):
         if provider == "duckmail" and duckmail_service is None:
             raise ValueError("provider=duckmail 时必须传入 duckmail_service")
 
-        if provider == "duckmail":
-            self._mail_provider = duckmail_service
+        if provider == "luckmail":
+            self._mail_provider = luckmail_service
         elif provider == "freemail":
             self._mail_provider = freemail_service
         elif provider == "gmail":

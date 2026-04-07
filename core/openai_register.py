@@ -261,7 +261,7 @@ class OpenAIRegister:
             except Exception as exc:
                 LOGGER.warning(f"[{times}] 获取验证码失败: {str(exc)[:200]}")
                 last_error = exc
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
 
         if last_error is not None:
             LOGGER.warning(f"等待验证码超时，最后一次错误: {last_error}")
@@ -383,7 +383,7 @@ class OpenAIRegister:
         LOGGER.info("等待验证码")
 
         code = await self._wait_for_verify_code_resend_if_needed(tab, account.mail_box, received_after=received_after,
-                                                                 timeout=2 * self._config.default_timeout_seconds)
+                                                                 timeout=5 * self._config.default_timeout_seconds)
         if not code:
             raise RuntimeError("获取验证码失败")
 
@@ -472,7 +472,7 @@ class OpenAIRegister:
                 LOGGER.info(f"{tag} 等待验证码")
 
                 code = await self._wait_for_verify_code_resend_if_needed(tab, mail_box=account.mail_box, received_after=received_after,
-                                                                         timeout=self._config.default_timeout_seconds * 2)
+                                                                         timeout=self._config.default_timeout_seconds * 5)
                 if not code:
                     raise RuntimeError("无法获取验证码")
 
@@ -562,6 +562,16 @@ class OpenAIRegister:
         ).json()
         return openai_register_util.create_cpa_auth_file_payload(response)
 
+    def _save_auth_file_to_local(self, file_name: str, raw_json: str) -> Path:
+        """先将授权文件保存到本地目录。"""
+
+        auth_file_dir = self._config.auth_file_dir
+        auth_file_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = auth_file_dir / file_name
+        file_path.write_text(f"{raw_json}\n", encoding="utf-8")
+        return file_path
+
     async def start(self, register_num: int = 1):
         """启动完整注册流程。"""
 
@@ -581,9 +591,12 @@ class OpenAIRegister:
                     oauth, callback_url = await self._start_oauth(tab, account)
                     LOGGER.info("开始提交回调链接")
                     auth_file = self._submit_callback_url(oauth, callback_url)
-                    LOGGER.info(f"获取授权文件成功\n{json.dumps(auth_file, indent=2, ensure_ascii=False)}")
+                    raw_auth_file = json.dumps(auth_file, indent=2, ensure_ascii=False)
+                    LOGGER.info(f"获取授权文件成功\n{raw_auth_file}")
                     file_name = f"{account.email}.json"
-                    ok = self._cpa_service.upload_auth_file(file_name, json.dumps(auth_file, ensure_ascii=False))
+                    local_file = self._save_auth_file_to_local(file_name, raw_auth_file)
+                    LOGGER.success(f"授权文件已保存到本地：{local_file}")
+                    ok = self._cpa_service.upload_auth_file(file_name, raw_auth_file)
                     if not ok:
                         raise RuntimeError("上传授权文件失败")
                     LOGGER.success(f"授权文件[{file_name}]上传成功")

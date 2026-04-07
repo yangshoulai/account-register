@@ -153,6 +153,7 @@ class OpenAIRegisterConfig:
     headless: bool = False
 
     default_account_password: str | None = None
+    auth_file_dir: Path = field(default_factory=lambda: (Path.cwd() / "accounts").resolve())
 
 
 @dataclass(frozen=True)
@@ -218,7 +219,7 @@ class ConfigService:
         cpa_config = cls._parse_cpa_config(services_table)
 
         registers_table = cls._require_table(data, "registers")
-        openai_register_config = cls._parse_openai_register_config(registers_table)
+        openai_register_config = cls._parse_openai_register_config(registers_table, base_dir=base_dir)
 
         return AppConfig(
             gmail=gmail_config,
@@ -526,11 +527,15 @@ class ConfigService:
         )
 
     @classmethod
-    def _parse_openai_register_config(cls, registers_table: dict[str, Any]) -> OpenAIRegisterConfig:
+    def _parse_openai_register_config(
+            cls,
+            registers_table: dict[str, Any],
+            base_dir: Path,
+    ) -> OpenAIRegisterConfig:
         """解析 OpenAI 注册机配置。"""
         openai_register_table = registers_table.get("openai")
         if openai_register_table is None:
-            return OpenAIRegisterConfig()
+            return OpenAIRegisterConfig(auth_file_dir=(base_dir / "accounts").resolve())
         if not isinstance(openai_register_table, dict):
             raise ConfigError("[registers.openai] 必须是表结构")
 
@@ -569,6 +574,13 @@ class ConfigService:
             default=None,
         )
 
+        auth_file_dir = cls._parse_optional_path(
+            openai_register_table.get("auth_file_dir"),
+            field_name="registers.openai.auth_file_dir",
+            base_dir=base_dir,
+            default=(base_dir / "accounts").resolve(),
+        )
+
         return OpenAIRegisterConfig(
             oauth_client_id=oauth_client_id,
             default_timeout_seconds=default_timeout_seconds,
@@ -576,6 +588,7 @@ class ConfigService:
             chrome_binary_path=chrome_binary_path,
             headless=headless,
             default_account_password=default_account_password,
+            auth_file_dir=auth_file_dir,
         )
 
     @classmethod
@@ -645,6 +658,20 @@ class ConfigService:
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"字段 `{field_name}` 必须是非空字符串")
         path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = (base_dir / path).resolve()
+        return path
+
+    @staticmethod
+    def _parse_optional_path(value: Any, field_name: str, base_dir: Path, default: Path) -> Path:
+        if value is None:
+            return default.resolve()
+        if not isinstance(value, str):
+            raise ConfigError(f"字段 `{field_name}` 必须是字符串")
+        cleaned = value.strip()
+        if not cleaned:
+            return default.resolve()
+        path = Path(cleaned).expanduser()
         if not path.is_absolute():
             path = (base_dir / path).resolve()
         return path

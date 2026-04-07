@@ -148,7 +148,7 @@ class LuckMailService(BaseMailService):
         try:
             response = self._http_service.request(
                 method=method,
-                url=path,
+                url=f"{self._config.base_url}{path}",
                 params=query,
                 json_body=body,
                 headers=headers,

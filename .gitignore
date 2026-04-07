@@ -40,6 +40,7 @@ htmlcov/
 # =========================
 *.log
 logs/
+accounts/
 tmp/
 temp/
 
@@ -64,4 +65,3 @@ config.toml
 config.local.toml
 .env
 .env.*
-
