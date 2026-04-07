@@ -136,7 +136,6 @@ class MailConfig:
 class HttpConfig:
     """通用 HTTP 客户端配置。"""
 
-    base_url: str | None = None
     timeout_seconds: int = 60
     verify_ssl: bool = True
     user_agent: str = DEFAULT_HTTP_USER_AGENT
@@ -453,14 +452,6 @@ class ConfigService:
         if not isinstance(http_table, dict):
             raise ConfigError("[services.http] 必须是表结构")
 
-        base_url_raw = http_table.get("base_url")
-        base_url: str | None = None
-        if base_url_raw is not None:
-            base_url = _normalize_base_url(
-                cls._parse_required_str(base_url_raw, "services.http.base_url"),
-                "services.http.base_url",
-            )
-
         timeout_seconds = cls._parse_positive_int(
             http_table.get("timeout_seconds"),
             field_name="services.http.timeout_seconds",
@@ -526,7 +517,6 @@ class ConfigService:
         )
 
         return HttpConfig(
-            base_url=base_url,
             timeout_seconds=timeout_seconds,
             verify_ssl=verify_ssl,
             user_agent=user_agent,

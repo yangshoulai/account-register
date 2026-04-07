@@ -171,8 +171,8 @@ class LuckMailService(BaseMailService):
         return LuckMailHttpResult(status_code=response.status_code, payload=parsed)
 
     @staticmethod
-    def _create_default_http_service(config: LuckMailConfig) -> HttpService:
+    def _create_default_http_service(_: LuckMailConfig) -> HttpService:
         """创建 LuckMail 默认 HTTP 客户端。"""
 
-        http_config = HttpConfig(base_url=config.base_url)
+        http_config = HttpConfig()
         return HttpService(config=http_config)

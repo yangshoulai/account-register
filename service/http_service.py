@@ -226,21 +226,13 @@ class HttpService:
         )
 
     def _build_url(self, url: str, params: dict[str, Any] | None) -> str:
-        """拼接 URL（支持 base_url + 相对路径）。"""
+        """拼接 URL，仅接受绝对地址。"""
 
-        raw = url.strip()
-        if not raw:
+        final = url.strip()
+        if not final:
             raise ValueError("url 不能为空")
-
-        if raw.startswith("http://") or raw.startswith("https://"):
-            final = raw
-        else:
-            base_url = self._config.base_url
-            if not base_url:
-                raise ValueError("当前 HttpConfig 未配置 base_url，无法使用相对路径")
-            if not raw.startswith("/"):
-                raw = f"/{raw}"
-            final = f"{base_url}{raw}"
+        if not (final.startswith("http://") or final.startswith("https://")):
+            raise ValueError("HttpService 仅支持绝对 URL，请传入完整的 http:// 或 https:// 地址")
 
         if params:
             query = urlencode(params, doseq=True)

@@ -145,7 +145,7 @@ class FreeMailService(BaseMailService):
             query: dict[str, Any] | None = None,
             body: dict[str, Any] | None = None,
     ):
-        request_path = self._build_request_path(path)
+        request_url = self._build_request_url(path)
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -155,7 +155,7 @@ class FreeMailService(BaseMailService):
         try:
             response = self._http_service.request(
                 method=method,
-                url=request_path,
+                url=request_url,
                 params=query,
                 json_body=body,
                 headers=headers,
@@ -177,14 +177,13 @@ class FreeMailService(BaseMailService):
             )
         return response
 
-    @staticmethod
-    def _build_request_path(path: str) -> str:
+    def _build_request_url(self, path: str) -> str:
         clean_path = path.strip()
         if not clean_path:
             raise ValueError("path 不能为空")
         if not clean_path.startswith("/"):
             clean_path = f"/{clean_path}"
-        return clean_path
+        return f"{self._config.base_url}{clean_path}"
 
     @staticmethod
     def _to_str(value: Any) -> str:
@@ -212,6 +211,6 @@ class FreeMailService(BaseMailService):
         return default
 
     @staticmethod
-    def _create_default_http_service(config: FreeMailConfig) -> HttpService:
-        http_config = HttpConfig(base_url=config.base_url)
+    def _create_default_http_service(_: FreeMailConfig) -> HttpService:
+        http_config = HttpConfig()
         return HttpService(config=http_config)
