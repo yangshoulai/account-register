@@ -45,6 +45,5 @@ def create_mail_service(app_config: AppConfig, provider: str, http_service: Http
 
 
 def _create_default_http_service(http_config: HttpConfig | None = None) -> HttpService:
-    """创建 LuckMail 默认 HTTP 客户端。"""
     http_config = http_config if http_config else HttpConfig()
     return HttpService(config=http_config)
