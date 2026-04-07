@@ -368,7 +368,7 @@ class OpenAIRegister:
         LOGGER.info("等待验证码")
 
         code = await self._wait_for_verify_code_resend_if_needed(tab, account.mail_box, received_after=received_after,
-                                                                 timeout=5 * self._config.default_timeout_seconds)
+                                                                 timeout=1 * self._config.default_timeout_seconds)
         if not code:
             raise RuntimeError("获取验证码失败")
 
@@ -457,7 +457,7 @@ class OpenAIRegister:
                 LOGGER.info(f"{tag} 等待验证码")
 
                 code = await self._wait_for_verify_code_resend_if_needed(tab, mail_box=account.mail_box, received_after=received_after,
-                                                                         timeout=self._config.default_timeout_seconds * 5)
+                                                                         timeout=self._config.default_timeout_seconds * 1)
                 if not code:
                     raise RuntimeError("无法获取验证码")
 

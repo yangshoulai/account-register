@@ -56,7 +56,7 @@ class GmailService(BaseMailService):
 
         return MailBox(email=f"{base_local}+{clean_alias}@{domain}")
 
-    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None) -> str:
+    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None, client: Resource | None = None) -> str:
         """
         获取最近一次验证码。
 
@@ -69,13 +69,15 @@ class GmailService(BaseMailService):
         if mail_filter and not callable(mail_filter):
             raise ValueError("mail_filter 必须是可调用对象")
 
-        message_refs = self._list_messages(query=f"to:{mail_box.email}")
+        client = client or self._client
+
+        message_refs = self._list_messages(query=f"to:{mail_box.email}", client=client)
         if not message_refs:
             return ""
 
         candidates: list[tuple[int, str]] = []
         for item in message_refs:
-            message = self._get_message(item.id, fmt="full")
+            message = self._get_message(item.id, fmt="full", client=client)
             mail_from = self._extract_from(message)
             subject = self._extract_subject(message)
             receive_at = self._format_receive_at(message)
@@ -91,8 +93,16 @@ class GmailService(BaseMailService):
             return ""
         return candidates[0][1]
 
-    def _list_messages(self, query: str | None = None) -> list[MessageRef]:
+    def get_target_mailbox_latest_verification_code(self, target_mail_box: str, mail_box: MailBox, mail_filter: MailFilter | None = None):
+        conf: GmailConfig = GmailConfig(email=target_mail_box, email_length=self._config.email_length, default_max_results=self._config.default_max_results,
+                                        proxy=self._config.proxy, api=self._config.api)
+        client = self._build_client(conf)
+        return self.get_latest_verification_code(mail_box, mail_filter, client)
+
+    def _list_messages(self, query: str | None = None, client: Resource | None = None) -> list[MessageRef]:
         """获取邮件列表（仅返回邮件 ID 与线程 ID）。"""
+        client = client or self._client
+
         request_kwargs: dict[str, Any] = {
             "userId": DEFAULT_USER_ID,
             "maxResults": self._config.default_max_results,
@@ -101,17 +111,17 @@ class GmailService(BaseMailService):
         if query:
             request_kwargs["q"] = query
 
-        response = self._client.users().messages().list(**request_kwargs).execute()
+        response = client.users().messages().list(**request_kwargs).execute()
         return [
             MessageRef(id=item["id"], thread_id=item["threadId"])
             for item in response.get("messages", [])
         ]
 
-    def _get_message(self, message_id: str, fmt: MessageFormat = "full") -> dict[str, Any]:
+    def _get_message(self, message_id: str, fmt: MessageFormat = "full", client: Resource | None = None) -> dict[str, Any]:
         """根据邮件 ID 获取邮件详情。"""
-
+        client = client or self._client
         return (
-            self._client.users()
+            client.users()
             .messages()
             .get(userId=DEFAULT_USER_ID, id=message_id, format=fmt)
             .execute()
