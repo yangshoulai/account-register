@@ -126,13 +126,6 @@ class FirefoxRelayConfig:
 
 
 @dataclass(frozen=True)
-class MailConfig:
-    """通用邮箱服务配置。"""
-
-    provider: str = "duckmail"
-
-
-@dataclass(frozen=True)
 class HttpConfig:
     """通用 HTTP 客户端配置。"""
 
@@ -154,13 +147,14 @@ class HttpConfig:
 @dataclass(frozen=True)
 class OpenAIRegisterConfig:
     """OpenAI 注册服务配置。"""
+    mail_provider: str
     oauth_client_id: str = DEFAULT_OPENAI_REGISTER_CLIENT_ID
     default_timeout_seconds: int = 60
     callback_server_port: int = 1455
     chrome_binary_path: str | None = None
     headless: bool = False
-
     default_account_password: str | None = None
+
     auth_file_dir: Path = field(default_factory=lambda: (Path.cwd() / "accounts").resolve())
 
 
@@ -181,7 +175,6 @@ class AppConfig:
     duckmail: DuckMailConfig | None = None
     firefoxrelay: FirefoxRelayConfig | None = None
 
-    mail: MailConfig = field(default_factory=MailConfig)
     http: HttpConfig = field(default_factory=HttpConfig)
     openai_register: OpenAIRegisterConfig = field(default_factory=OpenAIRegisterConfig)
     cpa: CpaConfig | None = None
@@ -210,22 +203,11 @@ class ConfigService:
     def _parse(cls, data: dict[str, Any], base_dir: Path) -> AppConfig:
         services_table = cls._require_table(data, "services")
 
-        mail_config = cls._parse_mail_config(services_table)
         gmail_config = None
         luckmail_config = None
         freemail_config = None
         duckmail_config = None
         firefoxrelay_config = None
-        if mail_config.provider == "freemail":
-            freemail_config = cls._parse_freemail_config(services_table)
-        elif mail_config.provider == "luckmail":
-            luckmail_config = cls._parse_luckmail_config(services_table)
-        elif mail_config.provider == "duckmail":
-            duckmail_config = cls._parse_duckmail_config(services_table)
-        elif mail_config.provider == "gmail":
-            gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
-        elif mail_config.provider == "firefoxrelay":
-            firefoxrelay_config = cls._parse_firefoxrelay_config(services_table)
 
         http_config = cls._parse_http_config(services_table)
         cpa_config = cls._parse_cpa_config(services_table)
@@ -233,13 +215,25 @@ class ConfigService:
         registers_table = cls._require_table(data, "registers")
         openai_register_config = cls._parse_openai_register_config(registers_table, base_dir=base_dir)
 
+        if openai_register_config.mail_provider == "freemail":
+            freemail_config = cls._parse_freemail_config(services_table)
+        elif openai_register_config.mail_provider == "luckmail":
+            luckmail_config = cls._parse_luckmail_config(services_table)
+        elif openai_register_config.mail_provider == "duckmail":
+            duckmail_config = cls._parse_duckmail_config(services_table)
+            gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
+        elif openai_register_config.mail_provider == "gmail":
+            gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
+        elif openai_register_config.mail_provider == "firefoxrelay":
+            firefoxrelay_config = cls._parse_firefoxrelay_config(services_table)
+            gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
+
         return AppConfig(
             gmail=gmail_config,
             luckmail=luckmail_config,
             freemail=freemail_config,
             duckmail=duckmail_config,
             firefoxrelay=firefoxrelay_config,
-            mail=mail_config,
             http=http_config,
             openai_register=openai_register_config,
             cpa=cpa_config,
@@ -332,19 +326,6 @@ class ConfigService:
             variant_mode=variant_mode,
             domain=domain,
         )
-
-    @classmethod
-    def _parse_mail_config(cls, services_table: dict[str, Any]) -> MailConfig:
-        """解析通用邮箱服务配置。"""
-
-        mail_table = services_table.get("mail")
-        if mail_table is None:
-            return MailConfig()
-        if not isinstance(mail_table, dict):
-            raise ConfigError("[services.mail] 必须是表结构")
-
-        provider = cls._parse_optional_str(mail_table.get("provider"), field_name="services.mail.provider", default="duckmail").lower()
-        return MailConfig(provider=provider)
 
     @classmethod
     def _parse_freemail_config(cls, services_table: dict[str, Any]) -> FreeMailConfig | None:
@@ -533,17 +514,18 @@ class ConfigService:
         )
 
     @classmethod
-    def _parse_openai_register_config(
-            cls,
-            registers_table: dict[str, Any],
-            base_dir: Path,
-    ) -> OpenAIRegisterConfig:
+    def _parse_openai_register_config(cls, registers_table: dict[str, Any], base_dir: Path) -> OpenAIRegisterConfig:
         """解析 OpenAI 注册机配置。"""
         openai_register_table = registers_table.get("openai")
         if openai_register_table is None:
-            return OpenAIRegisterConfig(auth_file_dir=(base_dir / "accounts").resolve())
+            raise ConfigError("[registers.openai] 配置项缺失")
         if not isinstance(openai_register_table, dict):
             raise ConfigError("[registers.openai] 必须是表结构")
+
+        mail_provider: str = cls._parse_required_str(
+            openai_register_table.get("mail_provider"),
+            field_name="registers.openai.mail_provider",
+        )
 
         oauth_client_id: str = cls._parse_optional_str(
             openai_register_table.get("oauth_client_id"),
@@ -588,6 +570,7 @@ class ConfigService:
         )
 
         return OpenAIRegisterConfig(
+            mail_provider=mail_provider,
             oauth_client_id=oauth_client_id,
             default_timeout_seconds=default_timeout_seconds,
             callback_server_port=callback_server_port,

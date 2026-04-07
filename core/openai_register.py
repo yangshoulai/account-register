@@ -18,11 +18,11 @@ from pydoll.browser.options import ChromiumOptions
 from pydoll.browser.tab import Tab
 from pydoll.constants import Key
 
-from service.base_mail_service import MailBox
+from service.base_mail_service import MailBox, BaseMailService
 from service.config_service import ConfigService, OpenAIRegisterConfig
 from service.cpa_service import CpaService
 from service.http_service import HttpService
-from service.mail_service import MailService
+from service.mail.mail_factory import create_mail_service
 from util import openai_register_util
 from util.account_util import Account, create_new_account
 from util.logger import get_logger
@@ -155,12 +155,7 @@ class CallbackServer:
         LOGGER.info("Callback server stopped")
 
 
-def _build_chrome_options(
-        *,
-        chrome_binary_path: str | None = None,
-        headless: bool = False,
-        proxy: str | None = None,
-) -> ChromiumOptions:
+def _build_chrome_options(chrome_binary_path: str | None = None, headless: bool = False) -> ChromiumOptions:
     """构建浏览器启动参数。"""
 
     options = ChromiumOptions()
@@ -173,8 +168,6 @@ def _build_chrome_options(
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
 
-    if proxy:
-        options.add_argument(f"--proxy-server={proxy}")
     if chrome_binary_path:
         options.binary_location = chrome_binary_path
     return options
@@ -199,34 +192,27 @@ class OpenAIRegister:
     def __init__(
             self,
             config: OpenAIRegisterConfig,
-            mail_service: MailService,
+            mail_provider: BaseMailService,
             cpa_service: CpaService,
-            http_service: HttpService,
-            *,
-            browser_proxy: str | None = None,
+            http_service: HttpService
     ):
         self._config = config
-        self._mail_service = mail_service
+        self._mail_provider = mail_provider
         self._cpa_service = cpa_service
         self._http_service = http_service
-        self._browser_proxy = browser_proxy
 
     @classmethod
     def from_config_file(cls, config_file: str | Path = "config.toml") -> "OpenAIRegister":
         """通过配置文件实例化注册机。"""
-
         app_config = ConfigService.load(config_file)
-        browser_proxy = (
-                app_config.http.proxy
-                or app_config.http.https_proxy
-                or app_config.http.http_proxy
-        )
+        http_service = HttpService(app_config.http)
+        mail_provider = create_mail_service(app_config, app_config.openai_register.mail_provider, http_service=http_service)
+
         return cls(
             config=app_config.openai_register,
-            mail_service=MailService.from_config_file(config_file),
+            mail_provider=mail_provider,
             cpa_service=CpaService.from_config_file(config_file),
-            http_service=HttpService(app_config.http),
-            browser_proxy=browser_proxy,
+            http_service=HttpService(app_config.http)
         )
 
     @property
@@ -253,7 +239,7 @@ class OpenAIRegister:
         while time.time() < deadline:
             times = times + 1
             try:
-                code = self._mail_service.get_latest_verification_code(mail_box, mail_filter=mail_filter)
+                code = self._mail_provider.get_latest_verification_code(mail_box, mail_filter=mail_filter)
                 if code:
                     LOGGER.info(f"[{times}] 获取验证码成功: {code}")
                     return code
@@ -347,7 +333,7 @@ class OpenAIRegister:
         if not input_email:
             raise RuntimeError("未找到邮箱输入框")
 
-        account = create_new_account(self._mail_service.generate_mail_box())
+        account = create_new_account(self._mail_provider.generate_mail_box())
         if self._config.default_account_password:
             account.password = self._config.default_account_password
         birthday_text = "-".join(account.birthday)
@@ -579,11 +565,7 @@ class OpenAIRegister:
         try:
             for i in range(register_num):
                 LOGGER.info(f"{'*' * 50} 开始第 {i + 1} / {register_num} 个注册流程 {'*' * 50}")
-                options = _build_chrome_options(
-                    headless=self._config.headless,
-                    chrome_binary_path=self._config.chrome_binary_path,
-                    proxy=self._browser_proxy,
-                )
+                options = _build_chrome_options(headless=self._config.headless, chrome_binary_path=self._config.chrome_binary_path)
                 async with Chrome(options=options) as browser:
                     tab = await browser.start()
                     account = await self._start_register(tab)

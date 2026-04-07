@@ -55,7 +55,7 @@ class FreeMailService(BaseMailService):
 
     def __init__(self, config: FreeMailConfig, http_service: HttpService | None = None):
         self._config = config
-        self._http_service = http_service or self._create_default_http_service(config)
+        self._http_service = http_service
 
     def generate_mail_box(self) -> MailBox:
         """随机生成新的临时邮箱。"""
@@ -209,8 +209,3 @@ class FreeMailService(BaseMailService):
             except ValueError:
                 return default
         return default
-
-    @staticmethod
-    def _create_default_http_service(_: FreeMailConfig) -> HttpService:
-        http_config = HttpConfig()
-        return HttpService(config=http_config)
