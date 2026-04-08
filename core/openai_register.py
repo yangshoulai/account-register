@@ -224,6 +224,20 @@ class OpenAIRegister:
 
         return self._config
 
+    async def _prepare_browser_env(self, tab: Tab):
+        oauth = openai_register_util.generate_oauth_url(self._config.oauth_client_id, self._config.callback_server_port)
+        async with tab.expect_and_bypass_cloudflare_captcha(time_to_wait_captcha=20):
+            await tab.go_to(oauth.auth_url)
+
+    @staticmethod
+    async def _ensure_input(tab: Tab, expression: str, value: str, timeout: int = 10, try_times: int = 3):
+        _input = await tab.query(expression, timeout)
+        for _ in range(try_times):
+            await _input.type_text(value, humanize=True)
+            _input = await tab.query(expression, timeout)
+            if _input.value == value:
+                return
+
     async def _wait_for_verify_code(self, mail_box: MailBox, received_after: str, timeout: int) -> str:
         """轮询 MailService 获取验证码。"""
         deadline = time.time() + timeout
@@ -351,9 +365,6 @@ class OpenAIRegister:
         LOGGER.info("点击提交按钮")
         received_after = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         await btn_submit.click(humanize=True)
-
-        async with tab.expect_and_bypass_cloudflare_captcha(time_to_wait_captcha=10):
-            pass
 
         input_password_or_code = await tab.query("//input[@name='new-password' or @name='code']", timeout=self._config.default_timeout_seconds)
         if await self._get_element_name(input_password_or_code) == "new-password":
@@ -557,6 +568,7 @@ class OpenAIRegister:
                 options = _build_chrome_options(headless=self._config.headless, chrome_binary_path=self._config.chrome_binary_path, ua=self._config.user_agent)
                 async with Chrome(options=options) as browser:
                     tab = await browser.start()
+                    await self._prepare_browser_env(tab)
                     account = await self._start_register(tab)
                     oauth, callback_url = await self._start_oauth(tab, account)
                     LOGGER.info("开始提交回调链接")
