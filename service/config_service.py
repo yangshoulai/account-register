@@ -151,8 +151,10 @@ class OpenAIRegisterConfig:
     oauth_client_id: str = DEFAULT_OPENAI_REGISTER_CLIENT_ID
     default_timeout_seconds: int = 60
     email_timeout_seconds: int = 60
+    email_retries: int = 3
     callback_server_port: int = 1455
     chrome_binary_path: str | None = None
+    chrome_proxy: str | None = None
     headless: bool = False
     user_agent: str = DEFAULT_HTTP_USER_AGENT
     default_account_password: str | None = None
@@ -547,6 +549,12 @@ class ConfigService:
             default=60,
         )
 
+        email_retries: int = cls._parse_positive_int(
+            openai_register_table.get("email_retries"),
+            field_name="registers.openai.email_retries",
+            default=3,
+        )
+
         callback_server_port: int = cls._parse_positive_int(
             openai_register_table.get("callback_server_port"),
             field_name="registers.openai.callback_server_port",
@@ -583,13 +591,21 @@ class ConfigService:
             default=(base_dir / "accounts").resolve(),
         )
 
+        chrome_proxy = cls._parse_optional_nullable_str(
+            openai_register_table.get("chrome_proxy"),
+            field_name="registers.openai.chrome_proxy",
+            default=None,
+        )
+
         return OpenAIRegisterConfig(
             mail_provider=mail_provider,
             oauth_client_id=oauth_client_id,
             default_timeout_seconds=default_timeout_seconds,
             email_timeout_seconds=email_timeout_seconds,
+            email_retries=email_retries,
             callback_server_port=callback_server_port,
             chrome_binary_path=chrome_binary_path,
+            chrome_proxy=chrome_proxy,
             headless=headless,
             user_agent=user_agent,
             default_account_password=default_account_password,

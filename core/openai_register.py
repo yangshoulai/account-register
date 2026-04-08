@@ -154,27 +154,6 @@ class CallbackServer:
         LOGGER.info("Callback server stopped")
 
 
-def _build_chrome_options(chrome_binary_path: str | None = None, headless: bool = False,
-                          ua: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36") -> ChromiumOptions:
-    """构建浏览器启动参数。"""
-
-    options = ChromiumOptions()
-    options.headless = headless
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--lang=zh-CN")
-    options.set_accept_languages("zh-CN,zh;q=0.9")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-setuid-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-
-    options.add_argument(f"--user-agent={ua}")
-
-    if chrome_binary_path:
-        options.binary_location = chrome_binary_path
-    return options
-
-
 async def _wait_for_url(tab: Tab, url_flags: list[str], timeout_sec: int) -> str:
     """等待页面跳转到指定 URL。"""
 
@@ -223,6 +202,27 @@ class OpenAIRegister:
 
         return self._config
 
+    def _build_chrome_options(self) -> ChromiumOptions:
+        options = ChromiumOptions()
+        options.headless = self._config.headless
+        options.set_accept_languages("zh-CN")
+
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--lang=zh-CN")
+        options.set_accept_languages("zh-CN,zh;q=0.9")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-setuid-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+
+        options.add_argument(f"--user-agent={self._config.user_agent}")
+
+        if self._config.chrome_binary_path:
+            options.binary_location = self._config.chrome_binary_path
+        if self._config.chrome_proxy:
+            options.add_argument(f"--proxy-server={self._config.chrome_proxy}")
+        return options
+
     async def _prepare_browser_env(self, tab: Tab):
         oauth = openai_register_util.generate_oauth_url(self._config.oauth_client_id, self._config.callback_server_port)
         LOGGER.info("探测 Cloudflare Turnstile 环境")
@@ -231,18 +231,26 @@ class OpenAIRegister:
 
     @staticmethod
     async def _ensure_input(tab: Tab, expression: str, value: str, timeout: int = 10, try_times: int = 3):
-        _input = await tab.query(expression, timeout)
-        _input_value = ""
-        for _ in range(try_times):
-            await _input.type_text(value, humanize=True)
+        target_value = str(value)
+        current_value = ""
+        for index in range(try_times):
+            input_el = await tab.query(expression, timeout)
+            await input_el.focus()
+            await input_el.clear()
+            await input_el.type_text(target_value)
             await asyncio.sleep(0.5)
-            _input = await tab.query(expression, timeout)
-            _input_value = _input.value
-            if _input_value == value:
+            current_value = await OpenAIRegister._get_live_input_value(input_el)
+            if current_value == target_value:
                 return
-            else:
-                await _input.clear()
-        raise RuntimeError(f"输入 {expression} 失败，当前值 = {_input_value}, 目标值 = {value}")
+        raise RuntimeError(f"输入 {expression} 失败，当前值={current_value}，目标值={target_value}")
+
+    @staticmethod
+    async def _get_live_input_value(input_el: Any) -> str:
+        resp = await input_el.execute_script(
+            "return (this.value ?? '').toString()",
+            return_by_value=True,
+        )
+        return str(resp.get("result", {}).get("result", {}).get("value", "") or "")
 
     async def _wait_for_verify_code(self, mail_box: MailBox, received_after: str, timeout_sec: int = 60) -> str:
         """轮询 MailService 获取验证码。"""
@@ -259,17 +267,15 @@ class OpenAIRegister:
             return True
 
         last_error: Exception | None = None
-        times = 0
         while time.time() < deadline:
-            times = times + 1
             try:
                 code = self._mail_provider.get_latest_verification_code(mail_box, mail_filter=mail_filter)
                 if code:
-                    LOGGER.info(f"[{times}] 获取验证码成功: {code}")
+                    LOGGER.info(f"获取验证码成功: {code}")
                     return code
-                LOGGER.debug(f"[{times}] 未获取验证码")
+                LOGGER.debug(f"未获取验证码")
             except Exception as exc:
-                LOGGER.warning(f"[{times}] 获取验证码失败: {str(exc)[:200]}")
+                LOGGER.warning(f"获取验证码失败: {str(exc)[:200]}")
                 last_error = exc
             await asyncio.sleep(5)
 
@@ -278,15 +284,22 @@ class OpenAIRegister:
         return ""
 
     async def _wait_for_verify_code_resend_if_needed(self, tab: Tab, mail_box: MailBox, received_after: str) -> str:
+        btn_resend = await tab.query("//button[@value='resend']", timeout=10, raise_exc=False)
+        if btn_resend:
+            await btn_resend.wait_until(is_visible=True, is_interactable=True, timeout=10)
+            await btn_resend.click(humanize=True)
         code = await self._wait_for_verify_code(mail_box, received_after, self._config.email_timeout_seconds)
         if not code:
-            btn_resend = await tab.query("//button[@value='resend']", timeout=10, raise_exc=False)
-            if btn_resend:
-                LOGGER.info("未收到验证码，将尝试重新发送验证码")
-                await btn_resend.wait_until(is_visible=True, is_interactable=True, timeout=10)
-                LOGGER.info("点击重新发送验证码")
-                await btn_resend.click(humanize=True)
-                code = await self._wait_for_verify_code(mail_box, received_after=received_after, timeout_sec=2 * self._config.email_timeout_seconds)
+            for i in range(self._config.email_retries):
+                btn_resend = await tab.query("//button[@value='resend']", timeout=10, raise_exc=False)
+                if btn_resend:
+                    await btn_resend.wait_until(is_visible=True, is_interactable=True, timeout=10)
+                    LOGGER.info(f"等待验证码超时，将尝试第 {i + 1} 次重新获取验证码")
+                    LOGGER.info("点击重新发送验证码")
+                    await btn_resend.click(humanize=True)
+                    code = await self._wait_for_verify_code(mail_box, received_after, self._config.email_timeout_seconds)
+                    if code:
+                        break
         return code
 
     @staticmethod
@@ -519,7 +532,8 @@ class OpenAIRegister:
         LOGGER.info(f"成功获取回调链接：{callback_url}")
         return oauth, callback_url
 
-    def _submit_callback_url(self, oauth: OAuthStart, callback_url: str) -> dict[str, Any]:
+    @staticmethod
+    async def _submit_callback_url(tab: Tab, oauth: OAuthStart, callback_url: str) -> dict[str, Any]:
         """提交 OAuth 回调地址并生成 CPA 授权文件。"""
 
         parsed = urllib.parse.urlparse(callback_url)
@@ -538,49 +552,38 @@ class OpenAIRegister:
             raise ValueError("callback url missing ?state=")
         if state != oauth.state:
             raise ValueError("state mismatch")
-
-        body = urllib.parse.urlencode(
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": oauth.client_id,
+            "code": code,
+            "redirect_uri": oauth.redirect_uri,
+            "code_verifier": oauth.code_verifier,
+        }
+        headers = [
             {
-                "grant_type": "authorization_code",
-                "client_id": oauth.client_id,
-                "code": code,
-                "redirect_uri": oauth.redirect_uri,
-                "code_verifier": oauth.code_verifier,
-            }
-        ).encode("utf-8")
-
-        response = self._http_service.post(
-            "https://auth.openai.com/oauth/token",
-            data=body,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
+                "name": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
             },
-            raise_for_status=False,
-        )
-        if response.status_code != 200:
+            {
+                "name": "Accept",
+                "value": "application/json",
+            },
+        ]
+        url = "https://auth.openai.com/oauth/token"
+        try:
+            response = await tab.request.post(url, data=data, headers=headers)
+            if response.status_code != 200:
+                raise RuntimeError(f"token exchange failed: {response.status_code}: {response.text}")
+            return openai_register_util.create_cpa_auth_file_payload(response.json())
+        except Exception as exc:
             # 打印完整的 curl 请求报文，方便人工处理
-            request_url = "https://auth.openai.com/oauth/token"
-            request_headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            }
-            request_body = body.decode("utf-8", errors="replace")
-            curl_parts: list[str] = ["curl", "-i", "-sS", "-X", "POST", request_url]
-            for header_name, header_value in request_headers.items():
-                curl_parts.extend(["-H", f"{header_name}: {header_value}"])
-            curl_parts.extend(["--data-raw", request_body])
+            curl_parts: list[str] = ["curl", "-i", "-sS", "-X", "POST", url]
+            for header in headers:
+                curl_parts.extend(["-H", f"{header['name']}: {header['value']}"])
+            curl_parts.extend(["--data-raw", urllib.parse.urlencode(data)])
             curl_command = " ".join(shlex.quote(part) for part in curl_parts)
-            LOGGER.error(
-                "token exchange failed: status=%s, response=%s",
-                response.status_code,
-                response.text,
-            )
             LOGGER.error("可复现 curl 请求报文：\n%s", curl_command)
-
-            raise RuntimeError(f"token exchange failed: {response.status_code}: {response.text}")
-
-        return openai_register_util.create_cpa_auth_file_payload(response.json())
+            raise exc
 
     def _save_auth_file_to_local(self, file_name: str, raw_json: str) -> Path:
         """先将授权文件保存到本地目录。"""
@@ -594,20 +597,19 @@ class OpenAIRegister:
 
     async def start(self, register_num: int = 1):
         """启动完整注册流程。"""
-
         server = CallbackServer(port=self._config.callback_server_port)
         await server.start()
-        try:
-            for i in range(register_num):
-                LOGGER.info(f"{'*' * 50} 开始第 {i + 1} / {register_num} 个注册流程 {'*' * 50}")
-                options = _build_chrome_options(headless=self._config.headless, chrome_binary_path=self._config.chrome_binary_path, ua=self._config.user_agent)
-                async with Chrome(options=options) as browser:
+        for i in range(register_num):
+            LOGGER.info(f"{'*' * 50} 开始第 {i + 1} / {register_num} 个注册流程 {'*' * 50}")
+            async with Chrome(options=self._build_chrome_options()) as browser:
+                account: Account | None = None
+                try:
                     tab = await browser.start()
                     await self._prepare_browser_env(tab)
                     account = await self._start_register(tab)
                     oauth, callback_url = await self._start_oauth(tab, account)
                     LOGGER.info("开始提交回调链接")
-                    auth_file = self._submit_callback_url(oauth, callback_url)
+                    auth_file = await self._submit_callback_url(tab, oauth, callback_url)
                     raw_auth_file = json.dumps(auth_file, indent=2, ensure_ascii=False)
                     LOGGER.info(f"获取授权文件成功\n{raw_auth_file}")
                     file_name = f"{account.email}.json"
@@ -617,10 +619,17 @@ class OpenAIRegister:
                     if not ok:
                         raise RuntimeError("上传授权文件失败")
                     LOGGER.success(f"授权文件[{file_name}]上传成功")
-        except Exception as exc:
-            LOGGER.error(f"注册失败：{exc}")
-        finally:
-            await server.stop()
+                except Exception as exc:
+                    LOGGER.error(f"注册失败：{exc}")
+                    try:
+                        # 截图
+                        self._config.auth_file_dir.mkdir(parents=True, exist_ok=True)
+                        screenshot_name = account.email if account else datetime.now().strftime('%Y%m%d%H%M%S')
+                        screenshot_file = self._config.auth_file_dir / f"screenshot_{screenshot_name}.png"
+                        await tab.take_screenshot(screenshot_file, quality=100)
+                    except Exception as ex:
+                        LOGGER.error(f"截图异常：{ex}")
+        await server.stop()
 
     def start_sync(self, register_num: int = 1):
         """同步入口。"""

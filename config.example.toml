@@ -109,10 +109,14 @@ oauth_client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
 default_timeout_seconds = 60
 # 邮箱验证码超时（秒）
 email_timeout_seconds = 60
+# 邮箱验证码重试次数
+email_retries = 3
 # 本地 OAuth 回调服务监听端口
 callback_server_port = 1455
 # Chrome 可执行文件路径（留空表示使用系统默认）
 chrome_binary_path = ""
+# Chrome 代理
+chrome_proxy = ""
 # 是否以无头模式启动浏览器
 headless = false
 # 最终认证文件本地保存目录，默认是项目根目录下的 accounts
