@@ -5,6 +5,7 @@ import errno
 import inspect
 import json
 import os
+import shlex
 import signal
 import subprocess
 import time
@@ -551,9 +552,31 @@ class OpenAIRegister:
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
             },
-            raise_for_status=True,
-        ).json()
-        return openai_register_util.create_cpa_auth_file_payload(response)
+            raise_for_status=False,
+        )
+        if response.status_code != 200:
+            # 打印完整的 curl 请求报文，方便人工处理
+            request_url = "https://auth.openai.com/oauth/token"
+            request_headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            }
+            request_body = body.decode("utf-8", errors="replace")
+            curl_parts: list[str] = ["curl", "-i", "-sS", "-X", "POST", request_url]
+            for header_name, header_value in request_headers.items():
+                curl_parts.extend(["-H", f"{header_name}: {header_value}"])
+            curl_parts.extend(["--data-raw", request_body])
+            curl_command = " ".join(shlex.quote(part) for part in curl_parts)
+            LOGGER.error(
+                "token exchange failed: status=%s, response=%s",
+                response.status_code,
+                response.text,
+            )
+            LOGGER.error("可复现 curl 请求报文：\n%s", curl_command)
+
+            raise RuntimeError(f"token exchange failed: {response.status_code}: {response.text}")
+
+        return openai_register_util.create_cpa_auth_file_payload(response.json())
 
     def _save_auth_file_to_local(self, file_name: str, raw_json: str) -> Path:
         """先将授权文件保存到本地目录。"""
