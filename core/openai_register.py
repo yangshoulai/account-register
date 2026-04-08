@@ -233,7 +233,8 @@ class OpenAIRegister:
     async def _ensure_input(tab: Tab, expression: str, value: str, timeout: int = 10, try_times: int = 3):
         _input = await tab.query(expression, timeout)
         for _ in range(try_times):
-            await _input.type_text(value, humanize=True)
+            await _input.clear()
+            await _input.type_text(value, humanize=False)
             _input = await tab.query(expression, timeout)
             if _input.value == value:
                 return
@@ -307,7 +308,8 @@ class OpenAIRegister:
             input_password = await tab.query(password_expression, timeout=self._config.default_timeout_seconds)
             await input_password.wait_until(is_visible=True, is_interactable=False, timeout=10)
             LOGGER.info(f"{tag} 输入密码：{password}")
-            await input_password.type_text(password, humanize=True)
+            # await input_password.type_text(password, humanize=True)
+            await self._ensure_input(tab, password_expression, password)
 
             btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
             await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
@@ -358,7 +360,8 @@ class OpenAIRegister:
 
         await input_email.wait_until(is_visible=True, is_interactable=False, timeout=10)
         LOGGER.info(f"输入邮箱：{account.email}")
-        await input_email.type_text(account.email, humanize=True)
+        await self._ensure_input(tab, "//input[@id='email']", account.email)
+        # await input_email.type_text(account.email, humanize=True)
 
         btn_submit = await tab.query("//button[@type='submit']", timeout=10)
         await btn_submit.wait_until(is_visible=True, is_interactable=True, timeout=10)
@@ -380,7 +383,8 @@ class OpenAIRegister:
             raise RuntimeError("获取验证码失败")
 
         LOGGER.info(f"输入验证码：{code}")
-        await input_code.type_text(code, humanize=False)
+        # await input_code.type_text(code, humanize=False)
+        await self._ensure_input(tab, "//input[@name='code']", code)
 
         btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
         await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
@@ -390,14 +394,16 @@ class OpenAIRegister:
         input_username = await tab.query("//input[@name='name']", timeout=self._config.default_timeout_seconds)
         await input_username.wait_until(is_visible=True, is_interactable=False, timeout=10)
         LOGGER.info(f"输入用户名：{account.username}")
-        await input_username.type_text(account.username, humanize=True)
+        # await input_username.type_text(account.username, humanize=True)
+        await self._ensure_input(tab, "//input[@name='name']", account.username)
 
-        input_age = await tab.query("//input[@name='age']", timeout=5, raise_exc=False)
+        input_age = await tab.query("//input[@name='age']", timeout=2, raise_exc=False)
         if input_age:
             await input_age.wait_until(is_visible=True, is_interactable=False, timeout=5)
             age = str(date.today().year - int(account.birthday[0]))
             LOGGER.info(f"输入年龄：{age}")
-            await input_age.type_text(age, humanize=True)
+            # await input_age.type_text(age, humanize=True)
+            await self._ensure_input(tab, "//input[@name='age']", age)
         else:
             birthday_compact = "".join(account.birthday)
             LOGGER.info(f"输入生日：{birthday_text}")
@@ -439,7 +445,8 @@ class OpenAIRegister:
                 input_email = await tab.query("//input[@name='email']", timeout=10)
                 await input_email.wait_until(is_visible=True, is_interactable=False, timeout=10)
                 LOGGER.info(f"{tag} 输入邮箱：{account.email}")
-                await input_email.type_text(account.email, humanize=True)
+                # await input_email.type_text(account.email, humanize=True)
+                await self._ensure_input(tab, "//input[@name='email']", account.email)
 
                 btn_submit = await tab.query("//button[@type='submit']", timeout=10)
                 await btn_submit.wait_until(is_visible=True, is_interactable=True, timeout=10)
@@ -469,7 +476,8 @@ class OpenAIRegister:
                     raise RuntimeError("无法获取验证码")
 
                 LOGGER.info(f"{tag} 输入验证码：{code}")
-                await input_code.type_text(code, humanize=False)
+                # await input_code.type_text(code, humanize=False)
+                await self._ensure_input(tab, "//input[@name='code']", code)
 
                 btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
                 await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
