@@ -107,6 +107,8 @@ forward_gmail = "<用于接收 Firefox Relay 转发的 Gmail 地址>"
 oauth_client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
 # 默认页面 / 接口等待超时（秒）
 default_timeout_seconds = 60
+# 邮箱验证码超时（秒）
+email_timeout_seconds = 60
 # 本地 OAuth 回调服务监听端口
 callback_server_port = 1455
 # Chrome 可执行文件路径（留空表示使用系统默认）

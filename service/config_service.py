@@ -150,6 +150,7 @@ class OpenAIRegisterConfig:
     mail_provider: str
     oauth_client_id: str = DEFAULT_OPENAI_REGISTER_CLIENT_ID
     default_timeout_seconds: int = 60
+    email_timeout_seconds: int = 60
     callback_server_port: int = 1455
     chrome_binary_path: str | None = None
     headless: bool = False
@@ -539,6 +540,13 @@ class ConfigService:
             field_name="registers.openai.default_timeout_seconds",
             default=60,
         )
+
+        email_timeout_seconds: int = cls._parse_positive_int(
+            openai_register_table.get("email_timeout_seconds"),
+            field_name="registers.openai.email_timeout_seconds",
+            default=60,
+        )
+
         callback_server_port: int = cls._parse_positive_int(
             openai_register_table.get("callback_server_port"),
             field_name="registers.openai.callback_server_port",
@@ -579,6 +587,7 @@ class ConfigService:
             mail_provider=mail_provider,
             oauth_client_id=oauth_client_id,
             default_timeout_seconds=default_timeout_seconds,
+            email_timeout_seconds=email_timeout_seconds,
             callback_server_port=callback_server_port,
             chrome_binary_path=chrome_binary_path,
             headless=headless,

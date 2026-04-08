@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import errno
 import inspect
@@ -17,7 +15,7 @@ from typing import Any
 from pydoll.browser import Chrome
 from pydoll.browser.options import ChromiumOptions
 from pydoll.browser.tab import Tab
-from pydoll.constants import Key, By
+from pydoll.constants import Key
 
 from service.base_mail_service import MailBox, BaseMailService
 from service.config_service import ConfigService, OpenAIRegisterConfig
@@ -29,7 +27,7 @@ from util.account_util import Account, create_new_account
 from util.logger import get_logger
 from util.openai_register_util import OAuthStart
 
-LOGGER = get_logger("OpenAI Register")
+LOGGER = get_logger("OpenAI Register", level="DEBUG")
 
 
 class CallbackServer:
@@ -246,9 +244,10 @@ class OpenAIRegister:
                 await _input.clear()
         raise RuntimeError(f"输入 {expression} 失败，当前值 = {_input_value}, 目标值 = {value}")
 
-    async def _wait_for_verify_code(self, mail_box: MailBox, received_after: str, timeout: int) -> str:
+    async def _wait_for_verify_code(self, mail_box: MailBox, received_after: str, timeout_sec: int = 60) -> str:
         """轮询 MailService 获取验证码。"""
-        deadline = time.time() + timeout
+        deadline = time.time() + timeout_sec + 5
+        LOGGER.info(f"开始轮询验证码 => 5s 间隔，{timeout_sec}s 超时")
 
         def mail_filter(mail_from: str, subject: str, receive_at: str) -> bool:
             if not "openai.com" in mail_from:
@@ -268,27 +267,26 @@ class OpenAIRegister:
                 if code:
                     LOGGER.info(f"[{times}] 获取验证码成功: {code}")
                     return code
-                LOGGER.warning(f"[{times}] 未获取验证码")
+                LOGGER.debug(f"[{times}] 未获取验证码")
             except Exception as exc:
                 LOGGER.warning(f"[{times}] 获取验证码失败: {str(exc)[:200]}")
                 last_error = exc
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
         if last_error is not None:
             LOGGER.warning(f"等待验证码超时，最后一次错误: {last_error}")
         return ""
 
-    async def _wait_for_verify_code_resend_if_needed(self, tab: Tab, mail_box: MailBox, received_after: str, timeout: int) -> str:
-        code = await self._wait_for_verify_code(mail_box, received_after, timeout)
+    async def _wait_for_verify_code_resend_if_needed(self, tab: Tab, mail_box: MailBox, received_after: str) -> str:
+        code = await self._wait_for_verify_code(mail_box, received_after, self._config.email_timeout_seconds)
         if not code:
-            LOGGER.info("未收到验证码，将尝试重新发送验证码")
             btn_resend = await tab.query("//button[@value='resend']", timeout=10, raise_exc=False)
             if btn_resend:
+                LOGGER.info("未收到验证码，将尝试重新发送验证码")
                 await btn_resend.wait_until(is_visible=True, is_interactable=True, timeout=10)
                 LOGGER.info("点击重新发送验证码")
                 await btn_resend.click(humanize=True)
-                LOGGER.info("等待验证码")
-                code = await self._wait_for_verify_code(mail_box, received_after=received_after, timeout=timeout)
+                code = await self._wait_for_verify_code(mail_box, received_after=received_after, timeout_sec=2 * self._config.email_timeout_seconds)
         return code
 
     @staticmethod
@@ -311,16 +309,15 @@ class OpenAIRegister:
         """输入密码并提交。"""
 
         for index in range(try_times):
-            tag = f"[{index + 1}]"
             input_password = await tab.query(password_expression, timeout=self._config.default_timeout_seconds)
             await input_password.wait_until(is_visible=True, is_interactable=False, timeout=10)
-            LOGGER.info(f"{tag} 输入密码：{password}")
+            LOGGER.info(f"输入密码：{password}")
             # await input_password.type_text(password, humanize=True)
             await self._ensure_input(tab, password_expression, password)
 
             btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
             await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
-            LOGGER.info(f"{tag} 点击继续按钮")
+            LOGGER.info(f"点击继续按钮")
             await btn_continue.click(humanize=True)
 
             next_element = await tab.query(
@@ -328,11 +325,11 @@ class OpenAIRegister:
                 timeout=self._config.default_timeout_seconds,
             )
             if next_element.tag_name == "button":
-                LOGGER.warning(f"{tag} 密码提交失败，点击重试")
+                LOGGER.warning(f"密码提交失败，点击重试")
                 await next_element.click(humanize=True)
                 continue
 
-            LOGGER.info(f"{tag} 提交密码成功")
+            LOGGER.info(f"提交密码成功")
             return
 
         raise RuntimeError("提交密码失败")
@@ -384,8 +381,7 @@ class OpenAIRegister:
         await input_code.wait_until(is_visible=True, is_interactable=False, timeout=10)
         LOGGER.info("等待验证码")
 
-        code = await self._wait_for_verify_code_resend_if_needed(tab, account.mail_box, received_after=received_after,
-                                                                 timeout=1 * self._config.default_timeout_seconds)
+        code = await self._wait_for_verify_code_resend_if_needed(tab, account.mail_box, received_after=received_after)
         if not code:
             raise RuntimeError("获取验证码失败")
 
@@ -443,21 +439,20 @@ class OpenAIRegister:
 
         last_url = ""
         for index in range(try_times):
-            tag = f"[{index + 1}]"
             try:
-                LOGGER.info(f"{tag} 访问授权链接页面")
+                LOGGER.info(f"访问授权链接页面")
                 await tab.go_to(oauth.auth_url, timeout=self._config.default_timeout_seconds)
                 await asyncio.sleep(2)
 
                 input_email = await tab.query("//input[@name='email']", timeout=10)
                 await input_email.wait_until(is_visible=True, is_interactable=False, timeout=10)
-                LOGGER.info(f"{tag} 输入邮箱：{account.email}")
+                LOGGER.info(f"输入邮箱：{account.email}")
                 # await input_email.type_text(account.email, humanize=True)
                 await self._ensure_input(tab, "//input[@name='email']", account.email)
 
                 btn_submit = await tab.query("//button[@type='submit']", timeout=10)
                 await btn_submit.wait_until(is_visible=True, is_interactable=True, timeout=10)
-                LOGGER.info(f"{tag} 点击提交按钮")
+                LOGGER.info(f"点击提交按钮")
 
                 received_after = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 await btn_submit.click(humanize=True)
@@ -475,20 +470,19 @@ class OpenAIRegister:
 
                 input_code = await tab.query("//input[@name='code']", timeout=self._config.default_timeout_seconds)
                 await input_code.wait_until(is_visible=True, is_interactable=False, timeout=10)
-                LOGGER.info(f"{tag} 等待验证码")
+                LOGGER.info(f"等待验证码")
 
-                code = await self._wait_for_verify_code_resend_if_needed(tab, mail_box=account.mail_box, received_after=received_after,
-                                                                         timeout=self._config.default_timeout_seconds * 1)
+                code = await self._wait_for_verify_code_resend_if_needed(tab, mail_box=account.mail_box, received_after=received_after)
                 if not code:
                     raise RuntimeError("无法获取验证码")
 
-                LOGGER.info(f"{tag} 输入验证码：{code}")
+                LOGGER.info(f"输入验证码：{code}")
                 # await input_code.type_text(code, humanize=False)
                 await self._ensure_input(tab, "//input[@name='code']", code)
 
                 btn_continue = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
                 await btn_continue.wait_until(is_visible=True, is_interactable=True, timeout=10)
-                LOGGER.info(f"{tag} 点击继续按钮")
+                LOGGER.info(f"点击继续按钮")
                 await btn_continue.click(humanize=True)
 
                 last_url = await _wait_for_url(
@@ -498,8 +492,12 @@ class OpenAIRegister:
                 )
                 if "/add-phone" not in last_url:
                     return
+                else:
+                    LOGGER.info(f"需要验证手机")
+                    if index < try_times - 1:
+                        LOGGER.info(f"尝试重新获取授权链接")
             except Exception as exc:
-                LOGGER.warning(f"{tag} 获取授权链接失败：{exc}")
+                LOGGER.warning(f"获取授权链接失败：{exc}")
 
         raise RuntimeError("需要手机号" if "/add-phone" in last_url else "无法获取授权链接")
 
