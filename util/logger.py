@@ -66,15 +66,19 @@ class Logger:
         *,
         stream = None,
     ) -> None:
+        resolved_level = self._resolve_level(level)
         self._logger = logging.getLogger(name)
-        self._logger.setLevel(self._resolve_level(level))
+        self._logger.setLevel(resolved_level)
         self._logger.propagate = False
 
         if not self._logger.handlers:
             handler = logging.StreamHandler(stream or sys.stdout)
-            handler.setLevel(self._resolve_level(level))
+            handler.setLevel(resolved_level)
             handler.setFormatter(_SingleLineFormatter(_DEFAULT_FORMAT, datefmt=_DEFAULT_DATEFMT))
             self._logger.addHandler(handler)
+        else:
+            for handler in self._logger.handlers:
+                handler.setLevel(resolved_level)
 
     @property
     def raw(self) -> logging.Logger:
