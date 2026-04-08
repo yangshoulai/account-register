@@ -29,7 +29,7 @@ from util.account_util import Account, create_new_account
 from util.logger import get_logger
 from util.openai_register_util import OAuthStart
 
-LOGGER = get_logger("OpenAI Pydoll Register")
+LOGGER = get_logger("OpenAI Register")
 
 
 class CallbackServer:
@@ -227,18 +227,24 @@ class OpenAIRegister:
 
     async def _prepare_browser_env(self, tab: Tab):
         oauth = openai_register_util.generate_oauth_url(self._config.oauth_client_id, self._config.callback_server_port)
+        LOGGER.info("探测 Cloudflare Turnstile 环境")
         async with tab.expect_and_bypass_cloudflare_captcha(time_to_wait_captcha=5):
             await tab.go_to(oauth.auth_url)
 
     @staticmethod
     async def _ensure_input(tab: Tab, expression: str, value: str, timeout: int = 10, try_times: int = 3):
         _input = await tab.query(expression, timeout)
+        _input_value = ""
         for _ in range(try_times):
-            await _input.clear()
-            await _input.type_text(value, humanize=False)
+            await _input.type_text(value, humanize=True)
+            await asyncio.sleep(0.5)
             _input = await tab.query(expression, timeout)
-            if _input.value == value:
+            _input_value = _input.value
+            if _input_value == value:
                 return
+            else:
+                await _input.clear()
+        raise RuntimeError(f"输入 {expression} 失败，当前值 = {_input_value}, 目标值 = {value}")
 
     async def _wait_for_verify_code(self, mail_box: MailBox, received_after: str, timeout: int) -> str:
         """轮询 MailService 获取验证码。"""
