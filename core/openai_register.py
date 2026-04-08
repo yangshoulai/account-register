@@ -227,7 +227,7 @@ class OpenAIRegister:
 
     async def _prepare_browser_env(self, tab: Tab):
         oauth = openai_register_util.generate_oauth_url(self._config.oauth_client_id, self._config.callback_server_port)
-        async with tab.expect_and_bypass_cloudflare_captcha(time_to_wait_captcha=20):
+        async with tab.expect_and_bypass_cloudflare_captcha(time_to_wait_captcha=5):
             await tab.go_to(oauth.auth_url)
 
     @staticmethod
