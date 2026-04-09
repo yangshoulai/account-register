@@ -372,8 +372,8 @@ class OpenAIRegister:
             # await input_username.type_text(account.username, humanize=True)
             await self._ensure_input(tab, "//input[@name='name']", account.username)
 
-            input_age = await tab.query("//input[@name='age']", timeout=2, raise_exc=False)
-            if input_age:
+            input_age = await tab.query("//input[@name='age' or @name='birthday']", timeout=2, raise_exc=False)
+            if input_age.get_attribute("name") == "age":
                 await input_age.wait_until(is_visible=True, is_interactable=False, timeout=5)
                 age = str(date.today().year - int(account.birthday[0]))
                 LOGGER.info(f"输入年龄：{age}")
