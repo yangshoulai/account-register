@@ -125,6 +125,8 @@ user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 auth_file_dir = "accounts/cpa/codex"
 # 是否上传授权文件到 CPA，默认 true
 upload_cpa_auth_file = true
+# 是否在异常时保存浏览器截图，默认 true
+save_screenshot_on_error = true
 # 邮箱服务，当前支持：luckmail / freemail / gmail / duckmail / firefoxrelay
 mail_provider = "gmail"
 # 注册账号时使用的默认密码（留空表示运行时随机生成）

@@ -606,6 +606,7 @@ class OpenAIRegister:
             LOGGER.info(f"{'*' * 50} 开始第 {i + 1} / {register_num} 个注册流程 {'*' * 50}")
             async with Chrome(options=self._build_chrome_options()) as browser:
                 account: Account | None = None
+                tab: Tab | None = None
                 try:
                     tab = await browser.start()
                     await self._prepare_browser_env(tab)
@@ -629,12 +630,18 @@ class OpenAIRegister:
                         LOGGER.info("配置已关闭上传 CPA，跳过授权文件上传")
                 except Exception as exc:
                     LOGGER.error(f"注册失败：{exc}")
+                    if not self._config.save_screenshot_on_error:
+                        LOGGER.info("配置已关闭异常截图，跳过浏览器截图")
+                        continue
+                    if tab is None:
+                        LOGGER.warning("浏览器标签页尚未初始化，无法截图")
+                        continue
                     try:
-                        # 截图
                         self._config.auth_file_dir.mkdir(parents=True, exist_ok=True)
                         screenshot_name = account.email if account else datetime.now().strftime('%Y%m%d%H%M%S')
                         screenshot_file = self._config.auth_file_dir / f"screenshot_{screenshot_name}.png"
                         await tab.take_screenshot(screenshot_file, quality=100)
+                        LOGGER.info(f"异常截图已保存：{screenshot_file}")
                     except Exception as ex:
                         LOGGER.error(f"截图异常：{ex}")
         await server.stop()

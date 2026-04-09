@@ -359,6 +359,7 @@ chrome_binary_path = ""
 headless = false
 auth_file_dir = "accounts"
 upload_cpa_auth_file = true
+save_screenshot_on_error = true
 default_account_password = ""
 ```
 
@@ -380,6 +381,7 @@ default_account_password = ""
 | `headless` | 否 | 是否无头运行浏览器 |
 | `auth_file_dir` | 否 | 本地 auth file 输出目录 |
 | `upload_cpa_auth_file` | 否 | 是否上传到 CPA，默认 `true` |
+| `save_screenshot_on_error` | 否 | 是否在异常时保存浏览器截图，默认 `true` |
 | `default_account_password` | 否 | 注册时固定密码；留空则随机生成 |
 
 ### 8.2 `[services.http]`
@@ -508,6 +510,10 @@ OpenAIRegister.from_config_file("config.toml").start_sync(register_num=1)
 2. CPA 上传结果
    - 当 `registers.openai.upload_cpa_auth_file = true` 时，会调用 `services.cpa` 配置对应的管理接口上传 auth file
    - 当该开关为 `false` 时，仅保存本地文件，不上传 CPA
+
+3. 异常截图（失败时）
+   - 当 `registers.openai.save_screenshot_on_error = true` 时，失败会在 `auth_file_dir` 下保存 `screenshot_*.png`
+   - 当该开关为 `false` 时，失败不截图
 
 ---
 
