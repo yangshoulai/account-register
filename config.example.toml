@@ -119,6 +119,8 @@ chrome_binary_path = ""
 chrome_proxy = ""
 # 是否以无头模式启动浏览器
 headless = false
+# 浏览器默认 UA
+user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 # 最终认证文件本地保存目录，默认是项目根目录下的 accounts
 auth_file_dir = "accounts/cpa/codex"
 # 是否上传授权文件到 CPA，默认 true
