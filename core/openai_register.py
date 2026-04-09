@@ -174,7 +174,7 @@ class OpenAIRegister:
             self,
             config: OpenAIRegisterConfig,
             mail_provider: BaseMailService,
-            cpa_service: CpaService,
+            cpa_service: CpaService | None,
             http_service: HttpService
     ):
         self._config = config
@@ -188,12 +188,13 @@ class OpenAIRegister:
         app_config = ConfigService.load(config_file)
         http_service = HttpService(app_config.http)
         mail_provider = create_mail_service(app_config, app_config.openai_register.mail_provider, http_service=http_service)
+        cpa_service = CpaService.from_config_file(config_file) if app_config.openai_register.upload_cpa_auth_file else None
 
         return cls(
             config=app_config.openai_register,
             mail_provider=mail_provider,
-            cpa_service=CpaService.from_config_file(config_file),
-            http_service=HttpService(app_config.http)
+            cpa_service=cpa_service,
+            http_service=http_service
         )
 
     @property
@@ -617,10 +618,15 @@ class OpenAIRegister:
                     file_name = f"{account.email}.json"
                     local_file = self._save_auth_file_to_local(file_name, raw_auth_file)
                     LOGGER.success(f"授权文件已保存到本地：{local_file}")
-                    ok = self._cpa_service.upload_auth_file(file_name, raw_auth_file)
-                    if not ok:
-                        raise RuntimeError("上传授权文件失败")
-                    LOGGER.success(f"授权文件[{file_name}]上传成功")
+                    if self._config.upload_cpa_auth_file:
+                        if self._cpa_service is None:
+                            raise RuntimeError("未初始化 CPA 服务，无法上传授权文件")
+                        ok = self._cpa_service.upload_auth_file(file_name, raw_auth_file)
+                        if not ok:
+                            raise RuntimeError("上传授权文件失败")
+                        LOGGER.success(f"授权文件[{file_name}]上传成功")
+                    else:
+                        LOGGER.info("配置已关闭上传 CPA，跳过授权文件上传")
                 except Exception as exc:
                     LOGGER.error(f"注册失败：{exc}")
                     try:

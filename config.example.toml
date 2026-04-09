@@ -51,10 +51,10 @@ default_max_results = 20
 
 [services.gmail.api]
 # 全局唯一 OAuth 客户端凭证文件（client_secret）
-credentials_file = "secrets/client_secret.json"
+credentials_file = "secrets/gmail/client_secret.json"
 # token 存储目录，最终 token 文件名固定为：<email>.json
 # 例如：your.email@gmail.com.json
-token_dir = "secrets/tokens"
+token_dir = "secrets/gmail/tokens"
 # 读取+删除邮件推荐权限
 scopes = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -120,7 +120,9 @@ chrome_proxy = ""
 # 是否以无头模式启动浏览器
 headless = false
 # 最终认证文件本地保存目录，默认是项目根目录下的 accounts
-auth_file_dir = "accounts"
+auth_file_dir = "accounts/cpa/codex"
+# 是否上传授权文件到 CPA，默认 true
+upload_cpa_auth_file = true
 # 邮箱服务，当前支持：luckmail / freemail / gmail / duckmail / firefoxrelay
 mail_provider = "gmail"
 # 注册账号时使用的默认密码（留空表示运行时随机生成）

@@ -358,6 +358,7 @@ callback_server_port = 1455
 chrome_binary_path = ""
 headless = false
 auth_file_dir = "accounts"
+upload_cpa_auth_file = true
 default_account_password = ""
 ```
 
@@ -378,6 +379,7 @@ default_account_password = ""
 | `chrome_binary_path` | 否 | Chrome 可执行文件路径 |
 | `headless` | 否 | 是否无头运行浏览器 |
 | `auth_file_dir` | 否 | 本地 auth file 输出目录 |
+| `upload_cpa_auth_file` | 否 | 是否上传到 CPA，默认 `true` |
 | `default_account_password` | 否 | 注册时固定密码；留空则随机生成 |
 
 ### 8.2 `[services.http]`
@@ -471,7 +473,7 @@ default_account_password = ""
 | `management_password` | 是 | 上传 auth file 的管理口令 |
 
 说明：
-- 仅在运行 `OpenAIRegister` 完整流程并上传 auth file 时必须配置
+- 仅在 `registers.openai.upload_cpa_auth_file = true` 时必须配置
 
 ---
 
@@ -504,7 +506,8 @@ OpenAIRegister.from_config_file("config.toml").start_sync(register_num=1)
    - 文件名通常为：`<注册邮箱>.json`
 
 2. CPA 上传结果
-   - 会调用 `services.cpa` 配置对应的管理接口上传 auth file
+   - 当 `registers.openai.upload_cpa_auth_file = true` 时，会调用 `services.cpa` 配置对应的管理接口上传 auth file
+   - 当该开关为 `false` 时，仅保存本地文件，不上传 CPA
 
 ---
 

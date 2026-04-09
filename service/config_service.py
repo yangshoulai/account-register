@@ -149,6 +149,7 @@ class OpenAIRegisterConfig:
     """OpenAI 注册服务配置。"""
     mail_provider: str
     oauth_client_id: str = DEFAULT_OPENAI_REGISTER_CLIENT_ID
+    upload_cpa_auth_file: bool = True
     default_timeout_seconds: int = 60
     email_timeout_seconds: int = 60
     email_retries: int = 3
@@ -537,6 +538,12 @@ class ConfigService:
             default=DEFAULT_OPENAI_REGISTER_CLIENT_ID,
         )
 
+        upload_cpa_auth_file: bool = cls._parse_optional_bool(
+            openai_register_table.get("upload_cpa_auth_file"),
+            field_name="registers.openai.upload_cpa_auth_file",
+            default=True,
+        )
+
         default_timeout_seconds: int = cls._parse_positive_int(
             openai_register_table.get("default_timeout_seconds"),
             field_name="registers.openai.default_timeout_seconds",
@@ -600,6 +607,7 @@ class ConfigService:
         return OpenAIRegisterConfig(
             mail_provider=mail_provider,
             oauth_client_id=oauth_client_id,
+            upload_cpa_auth_file=upload_cpa_auth_file,
             default_timeout_seconds=default_timeout_seconds,
             email_timeout_seconds=email_timeout_seconds,
             email_retries=email_retries,
