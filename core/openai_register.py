@@ -407,29 +407,31 @@ class OpenAIRegister:
         LOGGER.info("点击继续按钮")
         await btn_continue.click(humanize=True)
 
-        input_username = await tab.query("//input[@name='name']", timeout=self._config.default_timeout_seconds)
-        await input_username.wait_until(is_visible=True, is_interactable=False, timeout=10)
-        LOGGER.info(f"输入用户名：{account.username}")
-        # await input_username.type_text(account.username, humanize=True)
-        await self._ensure_input(tab, "//input[@name='name']", account.username)
+        input_username = await tab.query("//input[@name='name']", raise_exc=False, timeout=self._config.default_timeout_seconds)
+        # 直接注册成功，不出现用户名输入框
+        if input_username:
+            await input_username.wait_until(is_visible=True, is_interactable=False, timeout=10)
+            LOGGER.info(f"输入用户名：{account.username}")
+            # await input_username.type_text(account.username, humanize=True)
+            await self._ensure_input(tab, "//input[@name='name']", account.username)
 
-        input_age = await tab.query("//input[@name='age']", timeout=2, raise_exc=False)
-        if input_age:
-            await input_age.wait_until(is_visible=True, is_interactable=False, timeout=5)
-            age = str(date.today().year - int(account.birthday[0]))
-            LOGGER.info(f"输入年龄：{age}")
-            # await input_age.type_text(age, humanize=True)
-            await self._ensure_input(tab, "//input[@name='age']", age)
-        else:
-            birthday_compact = "".join(account.birthday)
-            LOGGER.info(f"输入生日：{birthday_text}")
-            await tab.keyboard.press(Key.TAB)
-            await tab.keyboard.type_text(birthday_compact)
+            input_age = await tab.query("//input[@name='age']", timeout=2, raise_exc=False)
+            if input_age:
+                await input_age.wait_until(is_visible=True, is_interactable=False, timeout=5)
+                age = str(date.today().year - int(account.birthday[0]))
+                LOGGER.info(f"输入年龄：{age}")
+                # await input_age.type_text(age, humanize=True)
+                await self._ensure_input(tab, "//input[@name='age']", age)
+            else:
+                birthday_compact = "".join(account.birthday)
+                LOGGER.info(f"输入生日：{birthday_text}")
+                await tab.keyboard.press(Key.TAB)
+                await tab.keyboard.type_text(birthday_compact)
 
-        btn_finish = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
-        await btn_finish.wait_until(is_visible=True, is_interactable=True, timeout=10)
-        LOGGER.info("点击完成账户创建按钮")
-        await btn_finish.click(humanize=True)
+            btn_finish = await tab.query("//button[@data-dd-action-name='Continue']", timeout=10)
+            await btn_finish.wait_until(is_visible=True, is_interactable=True, timeout=10)
+            LOGGER.info("点击完成账户创建按钮")
+            await btn_finish.click(humanize=True)
 
         await _wait_for_url(
             tab,
