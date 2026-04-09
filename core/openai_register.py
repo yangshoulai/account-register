@@ -22,7 +22,7 @@ from service.config_service import ConfigService, OpenAIRegisterConfig
 from service.cpa_service import CpaService
 from service.http_service import HttpService
 from service.mail.mail_factory import create_mail_service
-from util import openai_register_util
+from util import openai_register_util, pydoll_util
 from util.account_util import Account, create_new_account
 from util.logger import get_logger
 from util.openai_register_util import OAuthStart
@@ -154,19 +154,6 @@ class CallbackServer:
         LOGGER.info("Callback server stopped")
 
 
-async def _wait_for_url(tab: Tab, url_flags: list[str], timeout_sec: int) -> str:
-    """等待页面跳转到指定 URL。"""
-
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        current_url = (await tab.current_url or "").strip()
-        for flag in url_flags:
-            if flag in current_url:
-                return current_url
-        await asyncio.sleep(1)
-    raise RuntimeError(f"等待网页 {url_flags} 超时")
-
-
 class OpenAIRegister:
     """OpenAI 注册机。"""
 
@@ -232,26 +219,11 @@ class OpenAIRegister:
 
     @staticmethod
     async def _ensure_input(tab: Tab, expression: str, value: str, timeout: int = 10, try_times: int = 3):
-        target_value = str(value)
-        current_value = ""
-        for index in range(try_times):
-            input_el = await tab.query(expression, timeout)
-            await input_el.focus()
-            await input_el.clear()
-            await input_el.type_text(target_value)
-            await asyncio.sleep(0.5)
-            current_value = await OpenAIRegister._get_live_input_value(input_el)
-            if current_value == target_value:
-                return
-        raise RuntimeError(f"输入 {expression} 失败，当前值={current_value}，目标值={target_value}")
-
-    @staticmethod
-    async def _get_live_input_value(input_el: Any) -> str:
-        resp = await input_el.execute_script(
-            "return (this.value ?? '').toString()",
-            return_by_value=True,
-        )
-        return str(resp.get("result", {}).get("result", {}).get("value", "") or "")
+        success = await pydoll_util.ensure_input(tab, expression, value, timeout, try_times)
+        if success:
+            return
+        current_value = await pydoll_util.get_live_value(expression, tab)
+        raise RuntimeError(f"输入 {expression} 失败，当前值={current_value}，目标值={value}")
 
     async def _wait_for_verify_code(self, mail_box: MailBox, received_after: str, timeout_sec: int = 60) -> str:
         """轮询 MailService 获取验证码。"""
@@ -303,23 +275,7 @@ class OpenAIRegister:
                         break
         return code
 
-    @staticmethod
-    async def _get_element_name(element: Any) -> str:
-        """兼容同步/异步的 get_attribute 调用。"""
-
-        value = element.get_attribute("name")
-        if inspect.isawaitable(value):
-            value = await value
-        return str(value or "").strip()
-
-    async def _try_input_password_and_submit(
-            self,
-            tab: Tab,
-            password: str,
-            *,
-            password_expression: str,
-            try_times: int = 8,
-    ) -> None:
+    async def _try_input_password_and_submit(self, tab: Tab, password: str, *, password_expression: str, try_times: int = 8) -> None:
         """输入密码并提交。"""
 
         for index in range(try_times):
@@ -388,7 +344,7 @@ class OpenAIRegister:
         await btn_submit.click(humanize=True)
 
         input_password_or_code = await tab.query("//input[@name='new-password' or @name='code']", timeout=self._config.default_timeout_seconds)
-        if await self._get_element_name(input_password_or_code) == "new-password":
+        if input_password_or_code.get_attribute("name") == "new-password":
             await self._try_input_password_and_submit(tab, account.password, password_expression="//input[@name='new-password']")
 
         input_code = await tab.query("//input[@name='code']", timeout=self._config.default_timeout_seconds)
@@ -434,23 +390,12 @@ class OpenAIRegister:
             LOGGER.info("点击完成账户创建按钮")
             await btn_finish.click(humanize=True)
 
-        await _wait_for_url(
-            tab,
-            url_flags=["https://chatgpt.com"],
-            timeout_sec=self._config.default_timeout_seconds,
-        )
+        await pydoll_util.wait_url(tab, url_flags=["https://chatgpt.com"], timeout_sec=self._config.default_timeout_seconds)
         await asyncio.sleep(1)
         LOGGER.info("账号注册成功")
         return account
 
-    async def _try_get_consent_url(
-            self,
-            tab: Tab,
-            account: Account,
-            oauth: OAuthStart,
-            *,
-            try_times: int = 2,
-    ) -> None:
+    async def _try_get_consent_url(self, tab: Tab, account: Account, oauth: OAuthStart, try_times: int = 2) -> None:
         """执行 OAuth 授权页登录流程。"""
 
         last_url = ""
@@ -477,7 +422,7 @@ class OpenAIRegister:
                     "//input[@name='current-password' or @name='code']",
                     timeout=self._config.default_timeout_seconds,
                 )
-                if await self._get_element_name(input_password_or_code) == "current-password":
+                if input_password_or_code.get_attribute("name") == "current-password":
                     await self._try_input_password_and_submit(
                         tab,
                         account.password,
@@ -501,11 +446,7 @@ class OpenAIRegister:
                 LOGGER.info(f"点击继续按钮")
                 await btn_continue.click(humanize=True)
 
-                last_url = await _wait_for_url(
-                    tab,
-                    url_flags=["/codex/consent", "/add-phone"],
-                    timeout_sec=self._config.default_timeout_seconds,
-                )
+                last_url = await pydoll_util.wait_url(tab, url_flags=["/codex/consent", "/add-phone"], timeout_sec=self._config.default_timeout_seconds)
                 if "/add-phone" not in last_url:
                     return
                 else:
@@ -531,7 +472,7 @@ class OpenAIRegister:
 
         callback_host = f"localhost:{self._config.callback_server_port}"
         LOGGER.info("等待回调链接")
-        callback_url = await _wait_for_url(tab, url_flags=[callback_host], timeout_sec=self._config.default_timeout_seconds)
+        callback_url = await pydoll_util.wait_url(tab, url_flags=[callback_host], timeout_sec=self._config.default_timeout_seconds)
         LOGGER.info(f"成功获取回调链接：{callback_url}")
         return oauth, callback_url
 
@@ -653,5 +594,4 @@ class OpenAIRegister:
 
 
 if __name__ == "__main__":
-    register_num = 1
-    OpenAIRegister.from_config_file().start_sync(register_num)
+    OpenAIRegister.from_config_file().start_sync(1)
