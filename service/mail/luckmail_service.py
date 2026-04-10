@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
-from service.base_mail_service import MailFilter, BaseMailService, MailBox
-from service.config_service import HttpConfig, LuckMailConfig
+from service.base_mail_service import MailFilter, BaseMailService, MailBox, Mail
+from service.config_service import LuckMailConfig
 from service.http_service import HttpService, HttpServiceError
 
 
@@ -70,8 +71,18 @@ class LuckMailService(BaseMailService):
         email = purchases[0].get("email_address", "")
         return MailBox(email=email, extras=purchases[0])
 
-    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None) -> str:
-        """通过 Token 获取最新验证码。"""
+    # def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None, verification_code_regex: re.Pattern | None = None) -> str:
+    #     """通过 Token 获取最新验证码。"""
+    #
+    #     messages = self.get_latest_emails(mail_box=mail_box, mail_filter=mail_filter)
+    #     if messages:
+    #         for mail in messages:
+    #             if mail.verification_code:
+    #                 return mail.verification_code
+    #     return ""
+
+    def get_latest_emails(self, mail_box: MailBox, mail_filter: MailFilter | None = None, verification_code_regex: re.Pattern | None = None) -> list[Mail]:
+        """获取最新邮件。"""
 
         if mail_filter and not callable(mail_filter):
             raise ValueError("mail_filter 必须是可调用对象")
@@ -80,14 +91,16 @@ class LuckMailService(BaseMailService):
         if not clean_token:
             raise ValueError("token 不能为空")
 
-        data = self._request_json(method="GET", path=f"/email/token/{clean_token}/code", use_api_key=False)
-        mail = data.get("mail", {})
-        verification_code = data.get("verification_code", "")
-
-        if verification_code:
+        data = self._request_json(method="GET", path=f"/email/token/{clean_token}/mails", use_api_key=False)
+        mails = data.get("mails", [])
+        messages: list[Any] = []
+        for mail in mails:
             if (not filter) or mail_filter(mail.get("from"), mail.get("subject"), mail.get("received_at")):
-                return verification_code
-        return ""
+                verification_code = self.extract_verification_code([mail.get("subject"), mail.get("body")], verification_code_regex)
+
+                messages.append(Mail(sender=mail.get("from"), subject=mail.get("subject"), receive_at=mail.get("received_at"), content=mail.get("body"),
+                                     verification_code=verification_code))
+        return messages
 
     def _request_json(
             self,

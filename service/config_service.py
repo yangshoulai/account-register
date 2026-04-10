@@ -145,6 +145,13 @@ class HttpConfig:
 
 
 @dataclass(frozen=True)
+class CpaConfig:
+    """CPA 服务配置。"""
+    base_url: str
+    management_password: str
+
+
+@dataclass(frozen=True)
 class OpenAIRegisterConfig:
     """OpenAI 注册服务配置。"""
     mail_provider: str
@@ -165,10 +172,18 @@ class OpenAIRegisterConfig:
 
 
 @dataclass(frozen=True)
-class CpaConfig:
-    """CPA 服务配置。"""
-    base_url: str
-    management_password: str
+class GrokRegisterConfig:
+    """OpenAI 注册服务配置。"""
+    mail_provider: str
+    save_screenshot_on_error: bool = True
+    default_timeout_seconds: int = 60
+    email_timeout_seconds: int = 60
+    chrome_binary_path: str | None = None
+    chrome_proxy: str | None = None
+    headless: bool = False
+    user_agent: str = DEFAULT_HTTP_USER_AGENT
+    default_account_password: str | None = None
+    account_file_dir: Path = field(default_factory=lambda: (Path.cwd() / "accounts").resolve())
 
 
 @dataclass(frozen=True)
@@ -183,6 +198,7 @@ class AppConfig:
 
     http: HttpConfig = field(default_factory=HttpConfig)
     openai_register: OpenAIRegisterConfig = field(default_factory=OpenAIRegisterConfig)
+    grok_register: GrokRegisterConfig = field(default_factory=GrokRegisterConfig)
     cpa: CpaConfig | None = None
 
 
@@ -220,17 +236,18 @@ class ConfigService:
 
         registers_table = cls._require_table(data, "registers")
         openai_register_config = cls._parse_openai_register_config(registers_table, base_dir=base_dir)
+        grok_register_config = cls._parse_grok_register_config(registers_table, base_dir=base_dir)
 
-        if openai_register_config.mail_provider == "freemail":
+        if openai_register_config.mail_provider == "freemail" or grok_register_config.mail_provider == "freemail":
             freemail_config = cls._parse_freemail_config(services_table)
-        elif openai_register_config.mail_provider == "luckmail":
+        if openai_register_config.mail_provider == "luckmail" or grok_register_config.mail_provider == "luckmail":
             luckmail_config = cls._parse_luckmail_config(services_table)
-        elif openai_register_config.mail_provider == "duckmail":
+        if openai_register_config.mail_provider == "duckmail" or grok_register_config.mail_provider == "duckmail":
             duckmail_config = cls._parse_duckmail_config(services_table)
             gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
-        elif openai_register_config.mail_provider == "gmail":
+        if openai_register_config.mail_provider == "gmail" or grok_register_config.mail_provider == "gmail":
             gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
-        elif openai_register_config.mail_provider == "firefoxrelay":
+        if openai_register_config.mail_provider == "firefoxrelay" or grok_register_config.mail_provider == "firefoxrelay":
             firefoxrelay_config = cls._parse_firefoxrelay_config(services_table)
             gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
 
@@ -242,6 +259,7 @@ class ConfigService:
             firefoxrelay=firefoxrelay_config,
             http=http_config,
             openai_register=openai_register_config,
+            grok_register=grok_register_config,
             cpa=cpa_config,
         )
 
@@ -626,6 +644,87 @@ class ConfigService:
             user_agent=user_agent,
             default_account_password=default_account_password,
             auth_file_dir=auth_file_dir,
+        )
+
+    @classmethod
+    def _parse_grok_register_config(cls, registers_table: dict[str, Any], base_dir: Path) -> GrokRegisterConfig:
+        """解析 Grok 注册机配置。"""
+        grok_register_table = registers_table.get("grok")
+        if grok_register_table is None:
+            raise ConfigError("[registers.grok] 配置项缺失")
+        if not isinstance(grok_register_table, dict):
+            raise ConfigError("[registers.grok] 必须是表结构")
+
+        mail_provider: str = cls._parse_required_str(
+            grok_register_table.get("mail_provider"),
+            field_name="registers.grok.mail_provider",
+        )
+
+        save_screenshot_on_error: bool = cls._parse_optional_bool(
+            grok_register_table.get("save_screenshot_on_error"),
+            field_name="registers.grok.save_screenshot_on_error",
+            default=True,
+        )
+
+        default_timeout_seconds: int = cls._parse_positive_int(
+            grok_register_table.get("default_timeout_seconds"),
+            field_name="registers.grok.default_timeout_seconds",
+            default=60,
+        )
+
+        email_timeout_seconds: int = cls._parse_positive_int(
+            grok_register_table.get("email_timeout_seconds"),
+            field_name="registers.grok.email_timeout_seconds",
+            default=60,
+        )
+
+        chrome_binary_path: str | None = cls._parse_optional_nullable_str(
+            grok_register_table.get("chrome_binary_path"),
+            field_name="registers.grok.chrome_binary_path",
+            default=None,
+        )
+
+        headless: bool = cls._parse_optional_bool(
+            grok_register_table.get("headless"),
+            field_name="registers.grok.headless",
+            default=False,
+        )
+        user_agent = cls._parse_optional_nullable_str(
+            grok_register_table.get("user_agent"),
+            field_name="registers.grok.user_agent",
+            default=DEFAULT_HTTP_USER_AGENT,
+        )
+
+        default_account_password = cls._parse_optional_nullable_str(
+            grok_register_table.get("default_account_password"),
+            field_name="registers.grok.default_account_password",
+            default=None,
+        )
+
+        account_file_dir = cls._parse_optional_path(
+            grok_register_table.get("account_file_dir"),
+            field_name="registers.grok.account_file_dir",
+            base_dir=base_dir,
+            default=(base_dir / "accounts").resolve(),
+        )
+
+        chrome_proxy = cls._parse_optional_nullable_str(
+            grok_register_table.get("chrome_proxy"),
+            field_name="registers.grok.chrome_proxy",
+            default=None,
+        )
+
+        return GrokRegisterConfig(
+            mail_provider=mail_provider,
+            save_screenshot_on_error=save_screenshot_on_error,
+            default_timeout_seconds=default_timeout_seconds,
+            email_timeout_seconds=email_timeout_seconds,
+            chrome_binary_path=chrome_binary_path,
+            chrome_proxy=chrome_proxy,
+            headless=headless,
+            user_agent=user_agent,
+            default_account_password=default_account_password,
+            account_file_dir=account_file_dir,
         )
 
     @classmethod

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
-from service.base_mail_service import MailFilter, MailBox, BaseMailService
+from service.base_mail_service import MailFilter, MailBox, BaseMailService, Mail
 from service.config_service import ConfigService, FreeMailConfig, HttpConfig
 from service.http_service import HttpService, HttpServiceError
 
@@ -67,26 +67,37 @@ class FreeMailService(BaseMailService):
         email = payload.get("email")
         return MailBox(email=email)
 
-    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None) -> str:
-        """
-        获取最新验证码。
+    # def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None, verification_code_regex: re.Pattern | None = None) -> str:
+    #     """
+    #     获取最新验证码。
+    #
+    #     mail_filter 回调入参顺序严格为：
+    #     1) from（邮件发送者）
+    #     2) subject（邮件主题）
+    #     3) receive_at（yyyy-mm-dd HH:mm:ss）
+    #     """
+    #     messages: list[Mail] = self.get_latest_emails(mail_box, mail_filter, verification_code_regex)
+    #     if messages:
+    #         for message in messages:
+    #             if message.verification_code:
+    #                 return message.verification_code
+    #     return ""
 
-        mail_filter 回调入参顺序严格为：
-        1) from（邮件发送者）
-        2) subject（邮件主题）
-        3) receive_at（yyyy-mm-dd HH:mm:ss）
-        """
-
+    def get_latest_emails(self, mail_box: MailBox, mail_filter: MailFilter | None = None, verification_code_regex: re.Pattern | None = None) -> list[Mail]:
+        """获取最新邮件。"""
         if mail_filter and not callable(mail_filter):
             raise ValueError("mail_filter 必须是可调用对象")
 
         mail_items = self._fetch_latest_emails(mail_box.email)
-
+        messages = []
         for item in mail_items:
-            if item.verification_code:
-                if (not mail_filter) or mail_filter(item.sender, item.subject, item.received_at):
-                    return item.verification_code
-        return ""
+            if (not mail_filter) or mail_filter(item.sender, item.subject, item.received_at):
+                verification_code = item.verification_code
+                if not verification_code:
+                    verification_code = self.extract_verification_code([item.subject, item.preview], verification_code_regex)
+                messages.append(
+                    Mail(sender=item.sender, subject=item.subject, receive_at=item.received_at, content=item.preview, verification_code=verification_code))
+        return messages
 
     def _fetch_latest_emails(self, email_address: str) -> list[FreeMailEmailSummary]:
         """获取最新邮件摘要列表。"""

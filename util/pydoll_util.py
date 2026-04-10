@@ -134,3 +134,30 @@ async def ensure_input(tab: Tab, ele_selector: str, value: str, timeout_sec: int
         if current_value == target_value:
             return True
     return False
+
+
+async def get_cookies(tab: Tab) -> dict[str, str]:
+    """获取当前标签页所有 Cookie。
+
+    参数:
+        tab: 当前浏览器标签页。
+
+    返回:
+        Cookie 列表。
+    """
+    cookies = await tab.get_cookies()
+    return {c['name']: c['value'] for c in cookies}
+
+
+async def get_cookie(tab: Tab, name: str) -> str | None:
+    """获取当前标签页指定 Cookie 值。
+
+    参数:
+        tab: 当前浏览器标签页。
+        name: Cookie 名称。
+
+    返回:
+        Cookie 值。
+    """
+    cookies = await get_cookies(tab)
+    return cookies.get(name, None)

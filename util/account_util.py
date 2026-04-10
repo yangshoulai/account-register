@@ -64,6 +64,8 @@ class Account:
     mail_box: MailBox
 
 
+
+
 def create_new_account(mail_box: MailBox, password_length: int = 12) -> Account:
     first_name, last_name = _generate_username()
     password = _generate_password(password_length)

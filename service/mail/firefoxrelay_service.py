@@ -1,3 +1,6 @@
+import re
+from typing import Any
+
 from service.base_mail_service import MailFilter, BaseMailService, MailBox
 from service.config_service import FirefoxRelayConfig
 from service.http_service import HttpService
@@ -31,5 +34,11 @@ class FirefoxRelayService(BaseMailService):
             raise RuntimeError(f"获取 FirefoxRelay 马甲邮箱失败: {resp.text}")
         return MailBox(email=f"{email_addr}")
 
-    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None) -> str:
-        return self._gmail_service.get_target_mailbox_latest_verification_code(self._config.forward_gmail, mail_box, mail_filter=mail_filter)
+    # def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None, verification_code_regex: re.Pattern | None = None) -> str:
+    #     return self._gmail_service.get_target_mailbox_latest_verification_code(self._config.forward_gmail, mail_box, mail_filter=mail_filter,
+    #                                                                            verification_code_regex=verification_code_regex)
+
+    def get_latest_emails(self, mail_box: MailBox, mail_filter: MailFilter | None = None, verification_code_regex: re.Pattern | None = None) -> list[Any]:
+        """获取最新邮件。"""
+        raise self._gmail_service.get_target_mailbox_latest_emails(self._config.forward_gmail, mail_box, mail_filter=mail_filter,
+                                                                   verification_code_regex=verification_code_regex)

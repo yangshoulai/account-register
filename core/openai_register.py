@@ -184,12 +184,6 @@ class OpenAIRegister:
             http_service=http_service
         )
 
-    @property
-    def config(self) -> OpenAIRegisterConfig:
-        """返回注册机配置。"""
-
-        return self._config
-
     def _build_chrome_options(self) -> ChromiumOptions:
         options = ChromiumOptions()
         options.headless = self._config.headless

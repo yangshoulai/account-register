@@ -17,12 +17,11 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 
-from service.base_mail_service import MailFilter, BaseMailService, MailBox
+from service.base_mail_service import MailFilter, BaseMailService, MailBox, Mail
 from service.config_service import GmailConfig
 
 MessageFormat = Literal["minimal", "full", "raw", "metadata"]
 DEFAULT_USER_ID = "me"
-_OTP_PATTERN = re.compile(r"(?<!\d)(\d{4,8})(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -56,7 +55,8 @@ class GmailService(BaseMailService):
 
         return MailBox(email=f"{base_local}+{clean_alias}@{domain}")
 
-    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None, client: Resource | None = None) -> str:
+    def get_latest_verification_code(self, mail_box: MailBox, mail_filter: MailFilter | None = None, client: Resource | None = None,
+                                     verification_code_regex: re.Pattern | None = None) -> str:
         """
         获取最近一次验证码。
 
@@ -65,39 +65,49 @@ class GmailService(BaseMailService):
         2) subject（邮件主题）
         3) receive_at（yyyy-mm-dd HH:mm:ss）
         """
+        messages = self.get_latest_emails(mail_box, mail_filter, client, verification_code_regex)
+        if messages:
+            for message in messages:
+                if message.verification_code:
+                    return message.verification_code
+        return ""
 
+    def get_latest_emails(self, mail_box: MailBox, mail_filter: MailFilter | None = None, client: Resource | None = None,
+                          verification_code_regex: re.Pattern | None = None) -> list[Mail]:
+        """获取最新邮件。"""
         if mail_filter and not callable(mail_filter):
             raise ValueError("mail_filter 必须是可调用对象")
 
         client = client or self._client
 
         message_refs = self._list_messages(query=f"to:{mail_box.email}", client=client)
-        if not message_refs:
-            return ""
+        messages = []
+        if message_refs:
+            for item in message_refs:
+                message = self._get_message(item.id, fmt="full", client=client)
+                mail_from = self._extract_from(message)
+                subject = self._extract_subject(message)
+                receive_at = self._format_receive_at(message)
+                if mail_filter and not mail_filter(mail_from, subject, receive_at):
+                    continue
+                content = self.extract_text_from_message(message)
+                verification_code = self._extract_verification_code(message, verification_code_regex)
+                messages.append(Mail(sender=mail_from, subject=subject, receive_at=receive_at, content=content, verification_code=verification_code))
+        return messages
 
-        candidates: list[tuple[int, str]] = []
-        for item in message_refs:
-            message = self._get_message(item.id, fmt="full", client=client)
-            mail_from = self._extract_from(message)
-            subject = self._extract_subject(message)
-            receive_at = self._format_receive_at(message)
-            if mail_filter and not mail_filter(mail_from, subject, receive_at):
-                continue
-
-            code = self._extract_verification_code(message)
-            if not code:
-                continue
-            candidates.append((self._extract_internal_timestamp(message), code))
-
-        if not candidates:
-            return ""
-        return candidates[0][1]
-
-    def get_target_mailbox_latest_verification_code(self, target_mail_box: str, mail_box: MailBox, mail_filter: MailFilter | None = None):
+    def get_target_mailbox_latest_verification_code(self, target_mail_box: str, mail_box: MailBox, mail_filter: MailFilter | None = None,
+                                                    verification_code_regex: re.Pattern | None = None) -> str:
         conf: GmailConfig = GmailConfig(email=target_mail_box, email_length=self._config.email_length, default_max_results=self._config.default_max_results,
                                         proxy=self._config.proxy, api=self._config.api)
         client = self._build_client(conf)
-        return self.get_latest_verification_code(mail_box, mail_filter, client)
+        return self.get_latest_verification_code(mail_box, mail_filter, client, verification_code_regex)
+
+    def get_target_mailbox_latest_emails(self, target_mail_box: str, mail_box: MailBox, mail_filter: MailFilter | None = None,
+                                         verification_code_regex: re.Pattern | None = None) -> list[Mail]:
+        conf: GmailConfig = GmailConfig(email=target_mail_box, email_length=self._config.email_length, default_max_results=self._config.default_max_results,
+                                        proxy=self._config.proxy, api=self._config.api)
+        client = self._build_client(conf)
+        return self.get_latest_emails(mail_box, mail_filter, client, verification_code_regex)
 
     def _list_messages(self, query: str | None = None, client: Resource | None = None) -> list[MessageRef]:
         """获取邮件列表（仅返回邮件 ID 与线程 ID）。"""
@@ -201,18 +211,13 @@ class GmailService(BaseMailService):
         value = int(raw)
         return value // 1000 if value > 1_000_000_000_000 else value
 
-    @classmethod
-    def _extract_verification_code(cls, message: dict[str, Any]) -> str:
+    def _extract_verification_code(self, message: dict[str, Any], pattern: re.Pattern) -> str | None:
         texts = [
-            cls._extract_headers(message).get("subject", ""),
+            self._extract_headers(message).get("subject", ""),
             str(message.get("snippet") or ""),
-            cls.extract_text_from_message(message),
+            self.extract_text_from_message(message),
         ]
-        for text in texts:
-            matched = _OTP_PATTERN.search(text or "")
-            if matched:
-                return matched.group(1)
-        return ""
+        return self.extract_verification_code(texts, pattern)
 
     @staticmethod
     def _normalize_email(email: str) -> str:
