@@ -455,6 +455,7 @@ class OpenAIRegister:
                         LOGGER.info(f"尝试重新获取授权链接")
             except Exception as exc:
                 LOGGER.warning(f"获取授权链接失败：{exc}")
+                raise exc
 
         raise RuntimeError("需要手机号" if "/add-phone" in last_url else "无法获取授权链接")
 
