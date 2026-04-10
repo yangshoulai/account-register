@@ -35,5 +35,5 @@ class DuckMailService(BaseMailService):
 
     def get_latest_emails(self, mail_box: MailBox, mail_filter: MailFilter | None = None, verification_code_regex: re.Pattern | None = None) -> list[Any]:
         """获取最新邮件。"""
-        raise self._gmail_service.get_target_mailbox_latest_emails(self._config.forward_gmail, mail_box, mail_filter=mail_filter,
-                                                                   verification_code_regex=verification_code_regex)
+        return self._gmail_service.get_target_mailbox_latest_emails(self._config.forward_gmail, mail_box, mail_filter=mail_filter,
+                                                                    verification_code_regex=verification_code_regex)

@@ -42,7 +42,8 @@ class BaseMailService:
         """获取最新邮件。"""
         raise NotImplementedError
 
-    def extract_verification_code(self, texts: list[str], pattern: re.Pattern) -> str | None:
+    @staticmethod
+    def extract_verification_code(texts: list[str], pattern: re.Pattern | None = None) -> str | None:
         """从邮件内容中提取验证码。"""
         for text in texts:
             matched = (pattern or _OTP_PATTERN).search(text or "")
