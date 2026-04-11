@@ -153,3 +153,30 @@ save_screenshot_on_error = true
 mail_provider = "gmail"
 # 注册账号时使用的默认密码（留空表示运行时随机生成）
 default_account_password = "<默认注册密码，可留空>"
+
+
+[registers.qwen]
+# Qwen OAuth 客户端 ID
+oauth_client_id = "f0304373b74a44d2b584a3fb70ca9e56"
+# 默认页面 / 接口等待超时（秒）
+default_timeout_seconds = 30
+# 邮箱验证码超时（秒）
+email_timeout_seconds = 30
+# Chrome 可执行文件路径（留空表示使用系统默认）
+chrome_binary_path = ""
+# Chrome 代理
+chrome_proxy = "http://127.0.0.1:7890"
+# 是否以无头模式启动浏览器
+headless = false
+# 浏览器默认 UA
+user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+# 最终认证文件本地保存目录，默认是项目根目录下的 accounts
+auth_file_dir = "accounts/qwen"
+# 是否在异常时保存浏览器截图，默认 true
+save_screenshot_on_error = true
+# 邮箱服务，当前支持：luckmail / freemail / gmail / duckmail / firefoxrelay
+mail_provider = "freemail"
+# 注册账号时使用的默认密码（留空表示运行时随机生成）
+default_account_password = "<默认注册密码，可留空>"
+# 是否上传授权文件到 CPA，默认 true
+upload_cpa_auth_file = true

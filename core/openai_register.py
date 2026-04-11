@@ -589,4 +589,4 @@ class OpenAIRegister:
 
 
 if __name__ == "__main__":
-    OpenAIRegister.from_config_file().start_sync(1)
+    OpenAIRegister.from_config_file().start_sync(50)

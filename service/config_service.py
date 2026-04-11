@@ -15,6 +15,8 @@ DEFAULT_HTTP_IMPERSONATE = "chrome136"
 
 DEFAULT_OPENAI_REGISTER_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
+DEFAULT_QWEN_REGISTER_CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
+
 
 class ConfigError(ValueError):
     """配置文件读取或校验失败。"""
@@ -187,6 +189,23 @@ class GrokRegisterConfig:
 
 
 @dataclass(frozen=True)
+class QwenRegisterConfig:
+    """千问注册服务配置。"""
+    mail_provider: str
+    oauth_client_id: str = DEFAULT_QWEN_REGISTER_CLIENT_ID
+    upload_cpa_auth_file: bool = True
+    save_screenshot_on_error: bool = True
+    default_timeout_seconds: int = 60
+    email_timeout_seconds: int = 60
+    chrome_binary_path: str | None = None
+    chrome_proxy: str | None = None
+    headless: bool = False
+    user_agent: str = DEFAULT_HTTP_USER_AGENT
+    default_account_password: str | None = None
+    auth_file_dir: Path = field(default_factory=lambda: (Path.cwd() / "accounts").resolve())
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """应用结构化配置对象。"""
 
@@ -197,9 +216,12 @@ class AppConfig:
     firefoxrelay: FirefoxRelayConfig | None = None
 
     http: HttpConfig = field(default_factory=HttpConfig)
+
+    cpa: CpaConfig | None = None
+
     openai_register: OpenAIRegisterConfig = field(default_factory=OpenAIRegisterConfig)
     grok_register: GrokRegisterConfig = field(default_factory=GrokRegisterConfig)
-    cpa: CpaConfig | None = None
+    qwen_register: QwenRegisterConfig = field(default_factory=QwenRegisterConfig)
 
 
 class ConfigService:
@@ -237,17 +259,18 @@ class ConfigService:
         registers_table = cls._require_table(data, "registers")
         openai_register_config = cls._parse_openai_register_config(registers_table, base_dir=base_dir)
         grok_register_config = cls._parse_grok_register_config(registers_table, base_dir=base_dir)
+        qwen_register_config = cls._parse_qwen_register_config(registers_table, base_dir=base_dir)
 
-        if openai_register_config.mail_provider == "freemail" or grok_register_config.mail_provider == "freemail":
+        if openai_register_config.mail_provider == "freemail" or grok_register_config.mail_provider == "freemail" or qwen_register_config.mail_provider == "freemail":
             freemail_config = cls._parse_freemail_config(services_table)
-        if openai_register_config.mail_provider == "luckmail" or grok_register_config.mail_provider == "luckmail":
+        if openai_register_config.mail_provider == "luckmail" or grok_register_config.mail_provider == "luckmail" or qwen_register_config.mail_provider == "luckmail":
             luckmail_config = cls._parse_luckmail_config(services_table)
-        if openai_register_config.mail_provider == "duckmail" or grok_register_config.mail_provider == "duckmail":
+        if openai_register_config.mail_provider == "duckmail" or grok_register_config.mail_provider == "duckmail" or qwen_register_config.mail_provider == "duckmail":
             duckmail_config = cls._parse_duckmail_config(services_table)
             gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
-        if openai_register_config.mail_provider == "gmail" or grok_register_config.mail_provider == "gmail":
+        if openai_register_config.mail_provider == "gmail" or grok_register_config.mail_provider == "gmail" or qwen_register_config.mail_provider == "gmail":
             gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
-        if openai_register_config.mail_provider == "firefoxrelay" or grok_register_config.mail_provider == "firefoxrelay":
+        if openai_register_config.mail_provider == "firefoxrelay" or grok_register_config.mail_provider == "firefoxrelay" or qwen_register_config.mail_provider == "firefoxrelay":
             firefoxrelay_config = cls._parse_firefoxrelay_config(services_table)
             gmail_config = cls._parse_gmail_config(services_table, base_dir=base_dir)
 
@@ -260,6 +283,7 @@ class ConfigService:
             http=http_config,
             openai_register=openai_register_config,
             grok_register=grok_register_config,
+            qwen_register=qwen_register_config,
             cpa=cpa_config,
         )
 
@@ -725,6 +749,101 @@ class ConfigService:
             user_agent=user_agent,
             default_account_password=default_account_password,
             account_file_dir=account_file_dir,
+        )
+
+    @classmethod
+    def _parse_qwen_register_config(cls, registers_table: dict[str, Any], base_dir: Path) -> QwenRegisterConfig:
+        """解析 QwenAI 注册机配置。"""
+        qwen_register_table = registers_table.get("qwen")
+        if qwen_register_table is None:
+            raise ConfigError("[registers.qwen] 配置项缺失")
+        if not isinstance(qwen_register_table, dict):
+            raise ConfigError("[registers.qwen] 必须是表结构")
+
+        oauth_client_id: str = cls._parse_optional_str(
+            qwen_register_table.get("oauth_client_id"),
+            field_name="registers.qwen.oauth_client_id",
+            default=DEFAULT_QWEN_REGISTER_CLIENT_ID,
+        )
+
+        upload_cpa_auth_file: bool = cls._parse_optional_bool(
+            qwen_register_table.get("upload_cpa_auth_file"),
+            field_name="registers.qwen.upload_cpa_auth_file",
+            default=True,
+        )
+
+        mail_provider: str = cls._parse_required_str(
+            qwen_register_table.get("mail_provider"),
+            field_name="registers.qwen.mail_provider",
+        )
+
+        save_screenshot_on_error: bool = cls._parse_optional_bool(
+            qwen_register_table.get("save_screenshot_on_error"),
+            field_name="registers.qwen.save_screenshot_on_error",
+            default=True,
+        )
+
+        default_timeout_seconds: int = cls._parse_positive_int(
+            qwen_register_table.get("default_timeout_seconds"),
+            field_name="registers.qwen.default_timeout_seconds",
+            default=60,
+        )
+
+        email_timeout_seconds: int = cls._parse_positive_int(
+            qwen_register_table.get("email_timeout_seconds"),
+            field_name="registers.qwen.email_timeout_seconds",
+            default=60,
+        )
+
+        chrome_binary_path: str | None = cls._parse_optional_nullable_str(
+            qwen_register_table.get("chrome_binary_path"),
+            field_name="registers.qwen.chrome_binary_path",
+            default=None,
+        )
+
+        headless: bool = cls._parse_optional_bool(
+            qwen_register_table.get("headless"),
+            field_name="registers.qwen.headless",
+            default=False,
+        )
+        user_agent = cls._parse_optional_nullable_str(
+            qwen_register_table.get("user_agent"),
+            field_name="registers.qwen.user_agent",
+            default=DEFAULT_HTTP_USER_AGENT,
+        )
+
+        default_account_password = cls._parse_optional_nullable_str(
+            qwen_register_table.get("default_account_password"),
+            field_name="registers.qwen.default_account_password",
+            default=None,
+        )
+
+        auth_file_dir = cls._parse_optional_path(
+            qwen_register_table.get("auth_file_dir"),
+            field_name="registers.qwen.auth_file_dir",
+            base_dir=base_dir,
+            default=(base_dir / "accounts").resolve(),
+        )
+
+        chrome_proxy = cls._parse_optional_nullable_str(
+            qwen_register_table.get("chrome_proxy"),
+            field_name="registers.qwen.chrome_proxy",
+            default=None,
+        )
+
+        return QwenRegisterConfig(
+            oauth_client_id=oauth_client_id,
+            upload_cpa_auth_file=upload_cpa_auth_file,
+            mail_provider=mail_provider,
+            save_screenshot_on_error=save_screenshot_on_error,
+            default_timeout_seconds=default_timeout_seconds,
+            email_timeout_seconds=email_timeout_seconds,
+            chrome_binary_path=chrome_binary_path,
+            chrome_proxy=chrome_proxy,
+            headless=headless,
+            user_agent=user_agent,
+            default_account_password=default_account_password,
+            auth_file_dir=auth_file_dir,
         )
 
     @classmethod

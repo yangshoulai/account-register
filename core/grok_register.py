@@ -1,6 +1,5 @@
 import asyncio
 import json
-import random
 import re
 import time
 from datetime import datetime
@@ -22,18 +21,6 @@ from util.logger import get_logger
 LOGGER = get_logger("Grok Register")
 
 
-def _human_delay(min_sec: float = 0.3, max_sec: float = 0.8):
-    """模拟人类操作的随机等待"""
-    time.sleep(random.uniform(min_sec, max_sec))
-
-
-def _get_cookie_value(driver, name: str) -> str | None:
-    for cookie in driver.get_cookies():
-        if cookie.get("name") == name:
-            return cookie.get("value", None)
-    return None
-
-
 class GrokRegister:
     def __init__(self, config: GrokRegisterConfig, mail_provider: BaseMailService, http_service: HttpService):
         self._config = config
@@ -41,7 +28,7 @@ class GrokRegister:
         self._http_service = http_service
 
     @classmethod
-    def from_config_file(cls, config_file: str | Path = "config.toml") -> "OpenAIRegister":
+    def from_config_file(cls, config_file: str | Path = "config.toml") -> "GrokRegister":
         """通过配置文件实例化注册机。"""
         app_config = ConfigService.load(config_file)
         http_service = HttpService(app_config.http)

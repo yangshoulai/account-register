@@ -96,7 +96,8 @@ class FreeMailService(BaseMailService):
                 if not verification_code:
                     verification_code = self.extract_verification_code([item.subject, item.preview], verification_code_regex)
                 messages.append(
-                    Mail(sender=item.sender, subject=item.subject, receive_at=item.received_at, content=item.preview, verification_code=verification_code))
+                    Mail(sender=item.sender, subject=item.subject, receive_at=item.received_at, content=self._fetch_email_content(item.id),
+                         verification_code=verification_code))
         return messages
 
     def _fetch_latest_emails(self, email_address: str) -> list[FreeMailEmailSummary]:
@@ -136,6 +137,14 @@ class FreeMailService(BaseMailService):
                 )
             )
         return emails
+
+    def _fetch_email_content(self, email_id: int) -> str:
+        """获取邮件内容"""
+        payload = self._request_json(method="GET", path=f"/api/email/{email_id}")
+        if payload:
+            return payload["html_content"]
+        else:
+            return ""
 
     def _request_json(
             self,
